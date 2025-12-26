@@ -1,0 +1,96 @@
+name: Dev Container Compatibility Tests (Fedora)
+
+on:
+  workflow_dispatch:  # Manual trigger only (to control costs)
+  schedule:
+    - cron: '0 0 * * 0'  # Weekly on Sunday
+
+env:
+  GCP_PROJECT: podman-devcontainer-test
+  GCP_ZONE: us-central1-a
+  VM_NAME: fedora-runner-${{ github.run_id }}
+
+jobs:
+  test-on-fedora:
+    name: Test on Fedora (GCE)
+    runs-on: ubuntu-latest
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_CREDENTIALS }}
+      
+      - name: Setup gcloud CLI
+        uses: google-github-actions/setup-gcloud@v2
+      
+      - name: Generate SSH key
+        run: |
+          ssh-keygen -t rsa -b 4096 -f ~/.ssh/gce_key -N '' -q
+      
+      - name: Create Fedora CoreOS VM
+        run: |
+          gcloud compute instances create ${{ env.VM_NAME }} \
+            --project=${{ env.GCP_PROJECT }} \
+            --zone=${{ env.GCP_ZONE }} \
+            --machine-type=e2-micro \
+            --image-family=fedora-coreos-stable \
+            --image-project=fedora-coreos-cloud \
+            --boot-disk-size=20GB \
+            --metadata=ssh-keys="core:$(cat ~/.ssh/gce_key.pub)"
+          
+          EXTERNAL_IP=$(gcloud compute instances describe ${{ env.VM_NAME }} \
+            --zone=${{ env.GCP_ZONE }} \
+            --format='get(networkInterfaces[0].accessConfigs[0].natIP)')
+          echo "VM_IP=$EXTERNAL_IP" >> $GITHUB_ENV
+      
+      - name: Wait for SSH
+        run: |
+          echo "Waiting for SSH..."
+          for i in {1..30}; do
+            if ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 -i ~/.ssh/gce_key core@${{ env.VM_IP }} "echo OK" 2>/dev/null; then
+              echo "SSH ready"
+              break
+            fi
+            sleep 5
+          done
+      
+      - name: Run tests on Fedora VM
+        run: |
+          ssh -o StrictHostKeyChecking=no -i ~/.ssh/gce_key core@${{ env.VM_IP }} '
+            set -e
+            echo "=== Environment ==="
+            cat /etc/os-release | head -3
+            podman --version
+            
+            echo "=== Installing Node.js via nvm (no reboot needed) ==="
+            curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh | bash
+            export NVM_DIR="$HOME/.nvm"
+            [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
+            nvm install --lts
+            node --version
+            npm --version
+            
+            echo "=== Installing devcontainers CLI ==="
+            npm install -g @devcontainers/cli
+            
+            echo "=== Configure Podman ==="
+            mkdir -p ~/.config/containers
+            echo "unqualified-search-registries = [\"docker.io\"]" > ~/.config/containers/registries.conf
+            
+            echo "=== Cloning repository ==="
+            git clone https://github.com/tnk4on/podman-devcontainer-test.git
+            
+            echo "=== Running minimal test ==="
+            cd podman-devcontainer-test/tests/minimal
+            devcontainer up --workspace-folder . --docker-path podman
+          '
+      
+      - name: Delete Fedora VM
+        if: always()
+        run: |
+          gcloud compute instances delete ${{ env.VM_NAME }} \
+            --zone=${{ env.GCP_ZONE }} \
+            --quiet || true
