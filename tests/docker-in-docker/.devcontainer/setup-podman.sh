@@ -15,29 +15,21 @@ echo "Installing Podman and podman-docker..."
 sudo apt-get update
 sudo apt-get install -y podman podman-docker
 
-# Create /var/run/docker.sock via podman socket
-echo "Setting up Podman socket..."
-systemctl --user enable --now podman.socket || true
-
-# Create symlink for /var/run/docker.sock (if running as root)
-if [ "$(id -u)" = "0" ]; then
-    sudo systemctl enable --now podman.socket
-    sudo ln -sf /run/podman/podman.sock /var/run/docker.sock
-else
-    # For rootless, create user socket link
-    mkdir -p /run/user/$(id -u)
-    podman system service --time=0 unix:///run/user/$(id -u)/podman/podman.sock &
-    sleep 2
-fi
-
 # Verify installation
+echo ""
 echo "=== Verification ==="
-echo "docker command:"
+echo "docker --version:"
 docker --version
+
 echo ""
-echo "Checking if this is really Podman:"
-docker version 2>&1 | grep -i podman && echo "✅ Confirmed: docker command is using Podman" || echo "⚠️ Check failed"
-echo ""
-echo "Podman info:"
+echo "podman --version:"
 podman --version
 
+echo ""
+echo "Checking if docker is really Podman:"
+if docker version 2>&1 | grep -qi podman; then
+    echo "✅ Confirmed: docker command is using Podman"
+else
+    echo "⚠️ Verification check - docker version output:"
+    docker version 2>&1 || true
+fi

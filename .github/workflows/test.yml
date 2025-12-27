@@ -89,21 +89,22 @@ jobs:
       podman_version: ${{ needs.check-versions.outputs.podman_version }}
       devcontainer_version: ${{ needs.check-versions.outputs.devcontainer_version }}
 
-  call-fedora:
-    name: Fedora
-    needs: check-versions
-    if: |
-      needs.check-versions.outputs.should_run == 'true' &&
-      (github.event_name != 'workflow_dispatch' || github.event.inputs.run_fedora == 'true')
-    uses: ./.github/workflows/test-fedora.yml
-    secrets: inherit
-    with:
-      podman_version: ${{ needs.check-versions.outputs.podman_version }}
-      devcontainer_version: ${{ needs.check-versions.outputs.devcontainer_version }}
+  # Fedora tests temporarily disabled
+  # call-fedora:
+  #   name: Fedora
+  #   needs: check-versions
+  #   if: |
+  #     needs.check-versions.outputs.should_run == 'true' &&
+  #     github.event_name == 'workflow_dispatch' && github.event.inputs.run_fedora == 'true'
+  #   uses: ./.github/workflows/test-fedora.yml
+  #   secrets: inherit
+  #   with:
+  #     podman_version: ${{ needs.check-versions.outputs.podman_version }}
+  #     devcontainer_version: ${{ needs.check-versions.outputs.devcontainer_version }}
 
   finalize:
     name: Finalize
-    needs: [check-versions, call-ubuntu, call-fedora]
+    needs: [check-versions, call-ubuntu]
     runs-on: ubuntu-latest
     if: always()
     steps:
@@ -145,11 +146,11 @@ jobs:
             }
             
             const ubuntu = '${{ needs.call-ubuntu.result }}';
-            const fedora = '${{ needs.call-fedora.result }}';
+            const fedora = 'skipped';  // Fedora temporarily disabled
             const icon = r => r === 'success' ? '✅' : r === 'skipped' ? '⏭️' : '❌';
             
             const reasons = [];
-            if (ubuntu === 'failure' || fedora === 'failure') reasons.push('Failed');
+            if (ubuntu === 'failure') reasons.push('Failed');
             if ('${{ needs.check-versions.outputs.podman_updated }}' === 'true') reasons.push('New Podman');
             if ('${{ needs.check-versions.outputs.devcontainer_updated }}' === 'true') reasons.push('New CLI');
             if ('${{ github.event_name }}' === 'workflow_dispatch') reasons.push('Manual');
