@@ -40,10 +40,11 @@ jobs:
           gcloud compute instances create ${{ env.VM_NAME }} \
             --project=${{ env.GCP_PROJECT }} \
             --zone=${{ env.GCP_ZONE }} \
-            --machine-type=e2-medium \
+            --machine-type=e2-micro \
             --image-family=fedora-coreos-stable \
             --image-project=fedora-coreos-cloud \
-            --boot-disk-size=30GB \
+            --boot-disk-size=200GB \
+            --boot-disk-type=pd-balanced \
             --metadata=ssh-keys="core:$(cat ~/.ssh/gce_key.pub)"
           
           EXTERNAL_IP=$(gcloud compute instances describe ${{ env.VM_NAME }} \
