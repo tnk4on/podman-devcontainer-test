@@ -1,9 +1,6 @@
 # Podman Dev Container Compatibility Tests
 
-| Platform | Status |
-|----------|--------|
-| Ubuntu | [![Dev Container Compatibility Tests (Ubuntu)](https://github.com/tnk4on/podman-devcontainer-test/actions/workflows/test.yml/badge.svg?branch=main)](https://github.com/tnk4on/podman-devcontainer-test/actions/workflows/test.yml) |
-| Fedora | [![Dev Container Compatibility Tests (Fedora)](https://github.com/tnk4on/podman-devcontainer-test/actions/workflows/test-fedora.yml/badge.svg?branch=main)](https://github.com/tnk4on/podman-devcontainer-test/actions/workflows/test-fedora.yml) |
+[![Dev Container Compatibility Tests](https://github.com/tnk4on/podman-devcontainer-test/actions/workflows/test.yml/badge.svg?branch=main)](https://github.com/tnk4on/podman-devcontainer-test/actions/workflows/test.yml)
 
 Automated compatibility tests for [VS Code Dev Containers](https://code.visualstudio.com/docs/devcontainers/containers) with [Podman](https://podman.io/).
 

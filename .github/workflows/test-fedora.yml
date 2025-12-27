@@ -1,20 +1,26 @@
-name: Dev Container Compatibility Tests (Fedora)
+name: Test (Fedora)
 
 on:
-  workflow_dispatch:  # Manual trigger only (to control costs)
-  schedule:
-    - cron: '0 0 * * 0'  # Weekly on Sunday
+  workflow_dispatch:
+  workflow_call:
+    inputs:
+      podman_version:
+        type: string
+        required: false
+      devcontainer_version:
+        type: string
+        required: false
 
 env:
   GCP_PROJECT: podman-devcontainer-test
   GCP_ZONE: us-central1-a
   VM_NAME: fedora-runner-${{ github.run_id }}
+  SSH_OPTS: -o StrictHostKeyChecking=no -o ServerAliveInterval=30 -o ServerAliveCountMax=10
 
 jobs:
-  test-on-fedora:
-    name: Test on Fedora (GCE)
+  test:
+    name: Run Tests (GCE)
     runs-on: ubuntu-latest
-    
     steps:
       - uses: actions/checkout@v4
       
@@ -27,10 +33,9 @@ jobs:
         uses: google-github-actions/setup-gcloud@v2
       
       - name: Generate SSH key
-        run: |
-          ssh-keygen -t rsa -b 4096 -f ~/.ssh/gce_key -N '' -q
+        run: ssh-keygen -t rsa -b 4096 -f ~/.ssh/gce_key -N '' -q
       
-      - name: Create Fedora CoreOS VM
+      - name: Create Fedora VM
         run: |
           gcloud compute instances create ${{ env.VM_NAME }} \
             --project=${{ env.GCP_PROJECT }} \
@@ -48,192 +53,127 @@ jobs:
       
       - name: Wait for SSH
         run: |
-          echo "Waiting for SSH..."
           for i in {1..30}; do
-            if ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 -i ~/.ssh/gce_key core@${{ env.VM_IP }} "echo OK" 2>/dev/null; then
-              echo "SSH ready"
-              break
-            fi
+            ssh ${{ env.SSH_OPTS }} -o ConnectTimeout=5 -i ~/.ssh/gce_key core@${{ env.VM_IP }} "echo OK" 2>/dev/null && break
             sleep 5
           done
       
-      - name: Setup environment on Fedora VM
+      - name: Setup Fedora VM
         run: |
-          ssh -o StrictHostKeyChecking=no -i ~/.ssh/gce_key core@${{ env.VM_IP }} '
+          ssh ${{ env.SSH_OPTS }} -i ~/.ssh/gce_key core@${{ env.VM_IP }} '
             set -e
             echo "=== Environment ==="
             cat /etc/os-release | head -3
             podman --version
             
-            echo "=== Installing Node.js via nvm ==="
             curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh | bash
             export NVM_DIR="$HOME/.nvm"
             [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
             nvm install --lts
-            node --version
-            npm --version
-            
-            echo "=== Installing devcontainers CLI ==="
             npm install -g @devcontainers/cli
             devcontainer --version
             
-            echo "=== Configure Podman ==="
             mkdir -p ~/.config/containers
             echo "unqualified-search-registries = [\"docker.io\"]" > ~/.config/containers/registries.conf
             
-            echo "=== Cloning repository ==="
             git clone https://github.com/tnk4on/podman-devcontainer-test.git
           '
-      
-      - name: Run Test - Minimal
+
+      - name: Test - Minimal
         run: |
-          ssh -o StrictHostKeyChecking=no -i ~/.ssh/gce_key core@${{ env.VM_IP }} '
+          ssh ${{ env.SSH_OPTS }} -i ~/.ssh/gce_key core@${{ env.VM_IP }} '
             set -e
-            export NVM_DIR="$HOME/.nvm"
-            [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
-            
-            echo "=== Test: Minimal ==="
+            export NVM_DIR="$HOME/.nvm" && . "$NVM_DIR/nvm.sh"
             cd ~/podman-devcontainer-test/tests/minimal
             OUTPUT=$(devcontainer up --workspace-folder . --docker-path podman 2>&1)
-            echo "$OUTPUT"
             CONTAINER_ID=$(echo "$OUTPUT" | grep -o "\"containerId\":\"[^\"]*\"" | cut -d"\"" -f4 | head -1)
-            echo "Container ID: $CONTAINER_ID"
             podman rm -f "$CONTAINER_ID" || true
-            echo "PASSED"
+            echo "✅ Minimal PASSED"
           '
-      
-      - name: Run Test - Dockerfile
+
+      - name: Test - Dockerfile
         run: |
-          ssh -o StrictHostKeyChecking=no -i ~/.ssh/gce_key core@${{ env.VM_IP }} '
+          ssh ${{ env.SSH_OPTS }} -i ~/.ssh/gce_key core@${{ env.VM_IP }} '
             set -e
-            export NVM_DIR="$HOME/.nvm"
-            [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
-            
-            echo "=== Test: Dockerfile ==="
+            export NVM_DIR="$HOME/.nvm" && . "$NVM_DIR/nvm.sh"
             cd ~/podman-devcontainer-test/tests/dockerfile
             OUTPUT=$(devcontainer up --workspace-folder . --docker-path podman 2>&1)
-            echo "$OUTPUT"
             CONTAINER_ID=$(echo "$OUTPUT" | grep -o "\"containerId\":\"[^\"]*\"" | cut -d"\"" -f4 | head -1)
-            echo "Container ID: $CONTAINER_ID"
-            
-            # Validate curl is installed
             podman exec "$CONTAINER_ID" curl --version
-            
             podman rm -f "$CONTAINER_ID" || true
-            echo "PASSED"
+            echo "✅ Dockerfile PASSED"
           '
-      
-      - name: Run Test - Features (Go)
+
+      - name: Test - Features (Go)
         run: |
-          ssh -o StrictHostKeyChecking=no -i ~/.ssh/gce_key core@${{ env.VM_IP }} '
+          ssh ${{ env.SSH_OPTS }} -i ~/.ssh/gce_key core@${{ env.VM_IP }} '
             set -e
-            export NVM_DIR="$HOME/.nvm"
-            [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
-            
-            echo "=== Test: Features (Go) ==="
+            export NVM_DIR="$HOME/.nvm" && . "$NVM_DIR/nvm.sh"
             cd ~/podman-devcontainer-test/tests/features-go
             OUTPUT=$(devcontainer up --workspace-folder . --docker-path podman 2>&1)
-            echo "$OUTPUT"
             CONTAINER_ID=$(echo "$OUTPUT" | grep -o "\"containerId\":\"[^\"]*\"" | cut -d"\"" -f4 | head -1)
-            echo "Container ID: $CONTAINER_ID"
-            
-            # Validate Go is installed
             podman exec "$CONTAINER_ID" go version
-            
             podman rm -f "$CONTAINER_ID" || true
-            echo "PASSED"
+            echo "✅ Features (Go) PASSED"
           '
-      
-      - name: Run Test - Docker in Docker
+
+      - name: Test - Docker in Docker
         run: |
-          ssh -o StrictHostKeyChecking=no -i ~/.ssh/gce_key core@${{ env.VM_IP }} '
+          ssh ${{ env.SSH_OPTS }} -i ~/.ssh/gce_key core@${{ env.VM_IP }} '
             set -e
-            export NVM_DIR="$HOME/.nvm"
-            [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
-            
-            echo "=== Test: Docker in Docker ==="
+            export NVM_DIR="$HOME/.nvm" && . "$NVM_DIR/nvm.sh"
             cd ~/podman-devcontainer-test/tests/docker-in-docker
             OUTPUT=$(devcontainer up --workspace-folder . --docker-path podman 2>&1)
-            echo "$OUTPUT"
             CONTAINER_ID=$(echo "$OUTPUT" | grep -o "\"containerId\":\"[^\"]*\"" | cut -d"\"" -f4 | head -1)
-            echo "Container ID: $CONTAINER_ID"
-            
-            # Wait for Docker daemon
             sleep 5
-            
-            # Validate Docker works inside container
             podman exec "$CONTAINER_ID" docker run --rm hello-world
-            
             podman rm -f "$CONTAINER_ID" || true
-            echo "PASSED"
+            echo "✅ Docker in Docker PASSED"
           '
-      
-      - name: Run Test - Sample Python
+
+      - name: Test - Sample Python
         run: |
-          ssh -o StrictHostKeyChecking=no -i ~/.ssh/gce_key core@${{ env.VM_IP }} '
+          ssh ${{ env.SSH_OPTS }} -i ~/.ssh/gce_key core@${{ env.VM_IP }} '
             set -e
-            export NVM_DIR="$HOME/.nvm"
-            [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
-            
-            echo "=== Test: Sample Python ==="
+            export NVM_DIR="$HOME/.nvm" && . "$NVM_DIR/nvm.sh"
             cd ~/podman-devcontainer-test/tests/sample-python
             OUTPUT=$(devcontainer up --workspace-folder . --docker-path podman 2>&1)
-            echo "$OUTPUT"
             CONTAINER_ID=$(echo "$OUTPUT" | grep -o "\"containerId\":\"[^\"]*\"" | cut -d"\"" -f4 | head -1)
-            echo "Container ID: $CONTAINER_ID"
-            
-            # Validate Python is installed
             podman exec "$CONTAINER_ID" python3 --version
-            
             podman rm -f "$CONTAINER_ID" || true
-            echo "PASSED"
+            echo "✅ Sample Python PASSED"
           '
-      
-      - name: Run Test - Sample Node.js
+
+      - name: Test - Sample Node.js
         run: |
-          ssh -o StrictHostKeyChecking=no -i ~/.ssh/gce_key core@${{ env.VM_IP }} '
+          ssh ${{ env.SSH_OPTS }} -i ~/.ssh/gce_key core@${{ env.VM_IP }} '
             set -e
-            export NVM_DIR="$HOME/.nvm"
-            [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
-            
-            echo "=== Test: Sample Node.js ==="
+            export NVM_DIR="$HOME/.nvm" && . "$NVM_DIR/nvm.sh"
             cd ~/podman-devcontainer-test/tests/sample-node
             OUTPUT=$(devcontainer up --workspace-folder . --docker-path podman 2>&1)
-            echo "$OUTPUT"
             CONTAINER_ID=$(echo "$OUTPUT" | grep -o "\"containerId\":\"[^\"]*\"" | cut -d"\"" -f4 | head -1)
-            echo "Container ID: $CONTAINER_ID"
-            
-            # Validate Node.js is installed
             podman exec "$CONTAINER_ID" node --version
-            
             podman rm -f "$CONTAINER_ID" || true
-            echo "PASSED"
+            echo "✅ Sample Node.js PASSED"
           '
-      
-      - name: Run Test - Sample Go
+
+      - name: Test - Sample Go
         run: |
-          ssh -o StrictHostKeyChecking=no -i ~/.ssh/gce_key core@${{ env.VM_IP }} '
+          ssh ${{ env.SSH_OPTS }} -i ~/.ssh/gce_key core@${{ env.VM_IP }} '
             set -e
-            export NVM_DIR="$HOME/.nvm"
-            [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
-            
-            echo "=== Test: Sample Go ==="
+            export NVM_DIR="$HOME/.nvm" && . "$NVM_DIR/nvm.sh"
             cd ~/podman-devcontainer-test/tests/sample-go
             OUTPUT=$(devcontainer up --workspace-folder . --docker-path podman 2>&1)
-            echo "$OUTPUT"
             CONTAINER_ID=$(echo "$OUTPUT" | grep -o "\"containerId\":\"[^\"]*\"" | cut -d"\"" -f4 | head -1)
-            echo "Container ID: $CONTAINER_ID"
-            
-            # Validate Go is installed
             podman exec "$CONTAINER_ID" go version
-            
             podman rm -f "$CONTAINER_ID" || true
-            echo "PASSED"
+            echo "✅ Sample Go PASSED"
           '
-      
+
       - name: Delete Fedora VM
         if: always()
         run: |
           gcloud compute instances delete ${{ env.VM_NAME }} \
             --zone=${{ env.GCP_ZONE }} \
             --quiet || true
+

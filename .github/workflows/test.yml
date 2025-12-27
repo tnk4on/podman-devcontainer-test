@@ -1,35 +1,26 @@
-name: Dev Container Compatibility Tests (Ubuntu)
+name: Dev Container Compatibility Tests
 
 on:
-  # Manual trigger
   workflow_dispatch:
     inputs:
-      podman_version:
-        description: 'Podman version to test (leave empty for latest)'
+      run_fedora:
+        description: 'Also run Fedora tests'
         required: false
-        default: ''
-      devcontainer_cli_version:
-        description: 'Dev Container CLI version to test (leave empty for latest)'
-        required: false
-        default: ''
+        default: 'true'
+        type: boolean
 
-  # Scheduled runs - daily at 00:00 UTC
   schedule:
-    - cron: '0 0 * * *'
+    - cron: '0 0 * * *'  # Daily
 
-  # On push to main
   push:
-    branches:
-      - main
+    branches: [main]
     paths:
       - 'tests/**'
       - 'scripts/**'
       - '.github/workflows/**'
 
-  # On PR
   pull_request:
-    branches:
-      - main
+    branches: [main]
     paths:
       - 'tests/**'
       - 'scripts/**'
@@ -40,358 +31,99 @@ permissions:
   issues: write
 
 env:
-  # Cache keys for version checking
   PODMAN_VERSION_FILE: .podman-version
   DEVCONTAINER_CLI_VERSION_FILE: .devcontainer-cli-version
 
 jobs:
   check-versions:
-    name: Check for new releases
+    name: Check Versions
     runs-on: ubuntu-latest
     outputs:
       podman_updated: ${{ steps.check.outputs.podman_updated }}
       devcontainer_updated: ${{ steps.check.outputs.devcontainer_updated }}
       podman_version: ${{ steps.check.outputs.podman_version }}
       devcontainer_version: ${{ steps.check.outputs.devcontainer_version }}
+      should_run: ${{ steps.check.outputs.should_run }}
     steps:
       - uses: actions/checkout@v4
 
-      - name: Get latest versions
+      - name: Check versions
         id: check
         run: |
-          # Get latest Podman version from GitHub releases
           PODMAN_LATEST=$(curl -s https://api.github.com/repos/containers/podman/releases/latest | jq -r '.tag_name' | sed 's/^v//')
-          echo "Latest Podman: $PODMAN_LATEST"
-          
-          # Get latest devcontainers/cli version from npm
           DEVCONTAINER_LATEST=$(npm view @devcontainers/cli version)
-          echo "Latest @devcontainers/cli: $DEVCONTAINER_LATEST"
           
-          # Check if versions changed (for scheduled runs)
           PODMAN_UPDATED="false"
           DEVCONTAINER_UPDATED="false"
           
-          # Only check for version updates on schedule trigger
           if [ "${{ github.event_name }}" == "schedule" ]; then
             if [ -f "${{ env.PODMAN_VERSION_FILE }}" ]; then
-              PODMAN_CACHED=$(cat "${{ env.PODMAN_VERSION_FILE }}")
-              if [ "$PODMAN_CACHED" != "$PODMAN_LATEST" ]; then
-                PODMAN_UPDATED="true"
-                echo "Podman updated: $PODMAN_CACHED -> $PODMAN_LATEST"
-              fi
+              [ "$(cat ${{ env.PODMAN_VERSION_FILE }})" != "$PODMAN_LATEST" ] && PODMAN_UPDATED="true"
+            else
+              PODMAN_UPDATED="true"
             fi
-            
             if [ -f "${{ env.DEVCONTAINER_CLI_VERSION_FILE }}" ]; then
-              DEVCONTAINER_CACHED=$(cat "${{ env.DEVCONTAINER_CLI_VERSION_FILE }}")
-              if [ "$DEVCONTAINER_CACHED" != "$DEVCONTAINER_LATEST" ]; then
-                DEVCONTAINER_UPDATED="true"
-                echo "Dev Container CLI updated: $DEVCONTAINER_CACHED -> $DEVCONTAINER_LATEST"
-              fi
+              [ "$(cat ${{ env.DEVCONTAINER_CLI_VERSION_FILE }})" != "$DEVCONTAINER_LATEST" ] && DEVCONTAINER_UPDATED="true"
+            else
+              DEVCONTAINER_UPDATED="true"
             fi
           fi
+          
+          SHOULD_RUN="false"
+          [ "${{ github.event_name }}" != "schedule" ] && SHOULD_RUN="true"
+          [ "$PODMAN_UPDATED" == "true" ] && SHOULD_RUN="true"
+          [ "$DEVCONTAINER_UPDATED" == "true" ] && SHOULD_RUN="true"
           
           echo "podman_updated=$PODMAN_UPDATED" >> $GITHUB_OUTPUT
           echo "devcontainer_updated=$DEVCONTAINER_UPDATED" >> $GITHUB_OUTPUT
           echo "podman_version=$PODMAN_LATEST" >> $GITHUB_OUTPUT
           echo "devcontainer_version=$DEVCONTAINER_LATEST" >> $GITHUB_OUTPUT
+          echo "should_run=$SHOULD_RUN" >> $GITHUB_OUTPUT
 
-  test:
-    name: Run Tests (Ubuntu)
+  call-ubuntu:
+    name: Ubuntu
     needs: check-versions
-    runs-on: ubuntu-latest
-    # Run if: manual trigger, push/PR, or version updated
-    if: |
-      github.event_name == 'workflow_dispatch' ||
-      github.event_name == 'push' ||
-      github.event_name == 'pull_request' ||
-      needs.check-versions.outputs.podman_updated == 'true' ||
-      needs.check-versions.outputs.devcontainer_updated == 'true'
+    if: needs.check-versions.outputs.should_run == 'true'
+    uses: ./.github/workflows/test-ubuntu.yml
+    with:
+      podman_version: ${{ needs.check-versions.outputs.podman_version }}
+      devcontainer_version: ${{ needs.check-versions.outputs.devcontainer_version }}
 
+  call-fedora:
+    name: Fedora
+    needs: check-versions
+    if: |
+      needs.check-versions.outputs.should_run == 'true' &&
+      (github.event_name != 'workflow_dispatch' || github.event.inputs.run_fedora == 'true')
+    uses: ./.github/workflows/test-fedora.yml
+    secrets: inherit
+    with:
+      podman_version: ${{ needs.check-versions.outputs.podman_version }}
+      devcontainer_version: ${{ needs.check-versions.outputs.devcontainer_version }}
+
+  finalize:
+    name: Finalize
+    needs: [check-versions, call-ubuntu, call-fedora]
+    runs-on: ubuntu-latest
+    if: always()
     steps:
       - uses: actions/checkout@v4
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-
-      - name: Install Podman
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y podman
-          podman --version
-
-      - name: Configure Podman for rootless
-        run: |
-          mkdir -p ~/.config/containers
-          echo 'unqualified-search-registries = ["docker.io"]' > ~/.config/containers/registries.conf
-
-      - name: Install @devcontainers/cli
-        run: |
-          VERSION="${{ github.event.inputs.devcontainer_cli_version }}"
-          if [ -z "$VERSION" ]; then
-            npm install -g @devcontainers/cli
-          else
-            npm install -g @devcontainers/cli@$VERSION
-          fi
-          devcontainer --version
-
-      - name: Print Environment Info
-        run: |
-          echo "=== Environment ==="
-          echo "OS: $(uname -s) $(uname -m)"
-          echo "Podman: $(podman --version)"
-          echo "@devcontainers/cli: $(devcontainer --version)"
-          echo "Node.js: $(node --version)"
-          echo ""
-          echo "=== Podman Info ==="
-          podman info
-
-      - name: Run Test - Minimal
-        id: test-minimal
-        run: |
-          echo "=== Test: Minimal ==="
-          cd tests/minimal
-          OUTPUT=$(devcontainer up --workspace-folder . --docker-path podman 2>&1) || {
-            echo "FAILED"
-            echo "$OUTPUT"
-            exit 1
-          }
-          CONTAINER_ID=$(echo "$OUTPUT" | grep -o '"containerId":"[^"]*"' | cut -d'"' -f4 | head -1)
-          echo "Container ID: $CONTAINER_ID"
-          podman rm -f "$CONTAINER_ID" || true
-          echo "PASSED"
-
-      - name: Run Test - Dockerfile
-        id: test-dockerfile
-        run: |
-          echo "=== Test: Dockerfile ==="
-          cd tests/dockerfile
-          OUTPUT=$(devcontainer up --workspace-folder . --docker-path podman 2>&1) || {
-            echo "FAILED"
-            echo "$OUTPUT"
-            exit 1
-          }
-          CONTAINER_ID=$(echo "$OUTPUT" | grep -o '"containerId":"[^"]*"' | cut -d'"' -f4 | head -1)
-          echo "Container ID: $CONTAINER_ID"
-          
-          # Validate curl is installed
-          podman exec "$CONTAINER_ID" curl --version || {
-            echo "Validation FAILED: curl not found"
-            podman rm -f "$CONTAINER_ID" || true
-            exit 1
-          }
-          
-          podman rm -f "$CONTAINER_ID" || true
-          echo "PASSED"
-
-      - name: Run Test - Features (Go)
-        id: test-features-go
-        run: |
-          echo "=== Test: Features (Go) ==="
-          cd tests/features-go
-          OUTPUT=$(devcontainer up --workspace-folder . --docker-path podman 2>&1) || {
-            echo "FAILED"
-            echo "$OUTPUT"
-            exit 1
-          }
-          CONTAINER_ID=$(echo "$OUTPUT" | grep -o '"containerId":"[^"]*"' | cut -d'"' -f4 | head -1)
-          echo "Container ID: $CONTAINER_ID"
-          
-          # Validate Go is installed
-          podman exec "$CONTAINER_ID" go version || {
-            echo "Validation FAILED: go not found"
-            podman rm -f "$CONTAINER_ID" || true
-            exit 1
-          }
-          
-          podman rm -f "$CONTAINER_ID" || true
-          echo "PASSED"
-
-      - name: Run Test - Docker in Docker
-        id: test-dind
-        run: |
-          echo "=== Test: Docker in Docker ==="
-          cd tests/docker-in-docker
-          OUTPUT=$(devcontainer up --workspace-folder . --docker-path podman 2>&1) || {
-            echo "FAILED"
-            echo "$OUTPUT"
-            exit 1
-          }
-          CONTAINER_ID=$(echo "$OUTPUT" | grep -o '"containerId":"[^"]*"' | cut -d'"' -f4 | head -1)
-          echo "Container ID: $CONTAINER_ID"
-          
-          # Wait for Docker daemon to start
-          sleep 5
-          
-          # Validate Docker works inside container
-          podman exec "$CONTAINER_ID" docker run --rm hello-world || {
-            echo "Validation FAILED: docker run failed"
-            podman rm -f "$CONTAINER_ID" || true
-            exit 1
-          }
-          
-          podman rm -f "$CONTAINER_ID" || true
-          echo "PASSED"
-
-      # === Sample Tests (Issue #2881: Container samples not working using podman) ===
-      
-      - name: Run Test - Sample Python
-        id: test-sample-python
-        run: |
-          echo "=== Test: Sample Python ==="
-          cd tests/sample-python
-          OUTPUT=$(devcontainer up --workspace-folder . --docker-path podman 2>&1) || {
-            echo "FAILED"
-            echo "$OUTPUT"
-            exit 1
-          }
-          CONTAINER_ID=$(echo "$OUTPUT" | grep -o '"containerId":"[^"]*"' | cut -d'"' -f4 | head -1)
-          echo "Container ID: $CONTAINER_ID"
-          
-          # Validate Python is installed
-          podman exec "$CONTAINER_ID" python3 --version || {
-            echo "Validation FAILED: python3 not found"
-            podman rm -f "$CONTAINER_ID" || true
-            exit 1
-          }
-          
-          podman rm -f "$CONTAINER_ID" || true
-          echo "PASSED"
-
-      - name: Run Test - Sample Node.js
-        id: test-sample-node
-        run: |
-          echo "=== Test: Sample Node.js ==="
-          cd tests/sample-node
-          OUTPUT=$(devcontainer up --workspace-folder . --docker-path podman 2>&1) || {
-            echo "FAILED"
-            echo "$OUTPUT"
-            exit 1
-          }
-          CONTAINER_ID=$(echo "$OUTPUT" | grep -o '"containerId":"[^"]*"' | cut -d'"' -f4 | head -1)
-          echo "Container ID: $CONTAINER_ID"
-          
-          # Validate Node.js is installed
-          podman exec "$CONTAINER_ID" node --version || {
-            echo "Validation FAILED: node not found"
-            podman rm -f "$CONTAINER_ID" || true
-            exit 1
-          }
-          
-          podman rm -f "$CONTAINER_ID" || true
-          echo "PASSED"
-
-      - name: Run Test - Sample Go
-        id: test-sample-go
-        run: |
-          echo "=== Test: Sample Go ==="
-          cd tests/sample-go
-          OUTPUT=$(devcontainer up --workspace-folder . --docker-path podman 2>&1) || {
-            echo "FAILED"
-            echo "$OUTPUT"
-            exit 1
-          }
-          CONTAINER_ID=$(echo "$OUTPUT" | grep -o '"containerId":"[^"]*"' | cut -d'"' -f4 | head -1)
-          echo "Container ID: $CONTAINER_ID"
-          
-          # Validate Go is installed
-          podman exec "$CONTAINER_ID" go version || {
-            echo "Validation FAILED: go not found"
-            podman rm -f "$CONTAINER_ID" || true
-            exit 1
-          }
-          
-          podman rm -f "$CONTAINER_ID" || true
-          echo "PASSED"
-
       - name: Update version cache
-        if: github.event_name == 'schedule' && success()
+        if: github.event_name == 'schedule' && needs.call-ubuntu.result == 'success'
         run: |
           echo "${{ needs.check-versions.outputs.podman_version }}" > ${{ env.PODMAN_VERSION_FILE }}
           echo "${{ needs.check-versions.outputs.devcontainer_version }}" > ${{ env.DEVCONTAINER_CLI_VERSION_FILE }}
-          
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add ${{ env.PODMAN_VERSION_FILE }} ${{ env.DEVCONTAINER_CLI_VERSION_FILE }}
           git commit -m "Update version cache [skip ci]" || true
           git push || true
 
-  notify:
-    name: Send Notification
-    needs: [check-versions, test]
-    runs-on: ubuntu-latest
-    if: always()
-
-    steps:
-      - name: Prepare notification content
-        id: prepare
-        run: |
-          if [ "${{ needs.test.result }}" == "success" ]; then
-            STATUS="✅ All tests passed"
-            EMOJI="white_check_mark"
-          else
-            STATUS="❌ Some tests failed"
-            EMOJI="x"
-          fi
-          
-          BODY="## Dev Container + Podman Compatibility Test Results
-          
-          **Status**: $STATUS
-          **Podman Version**: ${{ needs.check-versions.outputs.podman_version }}
-          **Dev Container CLI Version**: ${{ needs.check-versions.outputs.devcontainer_version }}
-          **Trigger**: ${{ github.event_name }}
-          **Run**: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-          
-          ### Test Results
-          | Test | Result |
-          |------|--------|
-          | Minimal | ${{ needs.test.result == 'success' && '✅' || '❌' }} |
-          | Dockerfile | ${{ needs.test.result == 'success' && '✅' || '❌' }} |
-          | Features (Go) | ${{ needs.test.result == 'success' && '✅' || '❌' }} |
-          | Docker in Docker | ${{ needs.test.result == 'success' && '✅' || '❌' }} |
-          | Sample: Python | ${{ needs.test.result == 'success' && '✅' || '❌' }} |
-          | Sample: Node.js | ${{ needs.test.result == 'success' && '✅' || '❌' }} |
-          | Sample: Go | ${{ needs.test.result == 'success' && '✅' || '❌' }} |
-          "
-          
-          echo "status=$STATUS" >> $GITHUB_OUTPUT
-          echo "body<<EOF" >> $GITHUB_OUTPUT
-          echo "$BODY" >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
-
-      - name: Create Issue on Failure
-        if: needs.test.result == 'failure'
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const title = `🚨 Test Failure: Podman ${{ needs.check-versions.outputs.podman_version }} + CLI ${{ needs.check-versions.outputs.devcontainer_version }}`;
-            const body = `${{ steps.prepare.outputs.body }}`;
-            
-            // Check if issue already exists
-            const issues = await github.rest.issues.listForRepo({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              state: 'open',
-              labels: 'test-failure'
-            });
-            
-            const existingIssue = issues.data.find(i => i.title === title);
-            
-            if (!existingIssue) {
-              await github.rest.issues.create({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                title: title,
-                body: body,
-                labels: ['test-failure', 'automated']
-              });
-            }
-
-      - name: Add Comment to Tracking Issue
-        # Only notify on: failure, new version detected, manual trigger, or push
+      - name: Notify
         if: |
-          needs.test.result == 'failure' ||
+          needs.call-ubuntu.result == 'failure' ||
+          needs.call-fedora.result == 'failure' ||
           needs.check-versions.outputs.podman_updated == 'true' ||
           needs.check-versions.outputs.devcontainer_updated == 'true' ||
           github.event_name == 'workflow_dispatch' ||
@@ -399,52 +131,36 @@ jobs:
         uses: actions/github-script@v7
         with:
           script: |
-            // Find or create tracking issue
-            const trackingTitle = '📊 Test Results Tracking';
             const issues = await github.rest.issues.listForRepo({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              state: 'open',
-              labels: 'tracking'
+              owner: context.repo.owner, repo: context.repo.repo,
+              state: 'open', labels: 'tracking'
             });
-            
-            let trackingIssue = issues.data.find(i => i.title === trackingTitle);
-            
-            if (!trackingIssue) {
-              const created = await github.rest.issues.create({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                title: trackingTitle,
-                body: 'This issue tracks the results of automated compatibility tests.',
-                labels: ['tracking']
-              });
-              trackingIssue = created.data;
+            let issue = issues.data.find(i => i.title === '📊 Test Results Tracking');
+            if (!issue) {
+              issue = (await github.rest.issues.create({
+                owner: context.repo.owner, repo: context.repo.repo,
+                title: '📊 Test Results Tracking',
+                body: 'Automated test results.', labels: ['tracking']
+              })).data;
             }
             
-            // Build notification reason
+            const ubuntu = '${{ needs.call-ubuntu.result }}';
+            const fedora = '${{ needs.call-fedora.result }}';
+            const icon = r => r === 'success' ? '✅' : r === 'skipped' ? '⏭️' : '❌';
+            
             const reasons = [];
-            if ('${{ needs.test.result }}' === 'failure') reasons.push('Test failed');
-            if ('${{ needs.check-versions.outputs.podman_updated }}' === 'true') reasons.push('New Podman version');
-            if ('${{ needs.check-versions.outputs.devcontainer_updated }}' === 'true') reasons.push('New CLI version');
-            if ('${{ github.event_name }}' === 'workflow_dispatch') reasons.push('Manual trigger');
-            if ('${{ github.event_name }}' === 'push') reasons.push('Push to main');
-            if ('${{ github.event_name }}' === 'pull_request') reasons.push('Pull request');
-            
-            // Add comment with results
-            const status = '${{ needs.test.result }}' === 'success' ? '✅ PASSED' : '❌ FAILED';
-            const comment = `### Test Run: ${new Date().toISOString()}
-            
-            - **Status**: ${status}
-            - **Reason**: ${reasons.join(', ')}
-            - **Podman**: ${{ needs.check-versions.outputs.podman_version }}
-            - **Dev Container CLI**: ${{ needs.check-versions.outputs.devcontainer_version }}
-            - **Details**: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-            `;
+            if (ubuntu === 'failure' || fedora === 'failure') reasons.push('Failed');
+            if ('${{ needs.check-versions.outputs.podman_updated }}' === 'true') reasons.push('New Podman');
+            if ('${{ needs.check-versions.outputs.devcontainer_updated }}' === 'true') reasons.push('New CLI');
+            if ('${{ github.event_name }}' === 'workflow_dispatch') reasons.push('Manual');
+            if ('${{ github.event_name }}' === 'push') reasons.push('Push');
             
             await github.rest.issues.createComment({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: trackingIssue.number,
-              body: comment
+              owner: context.repo.owner, repo: context.repo.repo,
+              issue_number: issue.number,
+              body: `### ${new Date().toISOString()}
+              | Ubuntu | Fedora | Reason | Podman | CLI |
+              |--------|--------|--------|--------|-----|
+              | ${icon(ubuntu)} | ${icon(fedora)} | ${reasons.join(', ')} | ${{ needs.check-versions.outputs.podman_version }} | ${{ needs.check-versions.outputs.devcontainer_version }} |
+              [Details](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})`
             });
-
