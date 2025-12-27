@@ -100,30 +100,21 @@ jobs:
           podman rm -f "$CONTAINER_ID" || true
           echo "✅ Features (Go) PASSED"
 
-      - name: Test - Docker in Docker (Podman)
+      - name: Test - Docker in Docker
         run: |
           cd tests/docker-in-docker
           OUTPUT=$(devcontainer up --workspace-folder . --docker-path podman 2>&1)
           CONTAINER_ID=$(echo "$OUTPUT" | grep -o '"containerId":"[^"]*"' | cut -d'"' -f4 | head -1)
           
-          # Verify Podman is installed inside container
+          # Verify Docker is working inside container (using docker-in-docker feature)
           echo "=== Inside container: docker --version ==="
           podman exec "$CONTAINER_ID" docker --version
           
-          echo "=== Inside container: podman --version ==="
-          podman exec "$CONTAINER_ID" podman --version
-          
-          echo "=== Inside container: Verifying docker is Podman ==="
-          podman exec "$CONTAINER_ID" docker version 2>&1 | tee /tmp/docker-version.txt
-          if grep -qi podman /tmp/docker-version.txt; then
-            echo "✅ Confirmed: docker command inside container is using Podman"
-          else
-            echo "❌ docker command inside container is NOT using Podman"
-            exit 1
-          fi
+          echo "=== Testing docker run inside container ==="
+          podman exec "$CONTAINER_ID" docker run --rm hello-world
           
           podman rm -f "$CONTAINER_ID" || true
-          echo "✅ Docker in Docker (Podman) PASSED"
+          echo "✅ Docker in Docker PASSED"
 
       - name: Test - Sample Python
         run: |

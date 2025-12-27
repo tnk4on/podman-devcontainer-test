@@ -1,4 +1,6 @@
 {
   "image": "mcr.microsoft.com/devcontainers/base:ubuntu",
-  "postCreateCommand": "bash .devcontainer/setup-podman.sh"
+  "features": {
+    "ghcr.io/devcontainers/features/docker-in-docker:2": {}
+  }
 }
