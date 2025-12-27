@@ -71,15 +71,32 @@ jobs:
           podman rm -f "$CONTAINER_ID" || true
           echo "✅ Features (Go) PASSED"
 
-      - name: Test - Docker in Docker
+      - name: Test - Docker in Docker (Podman)
         run: |
           cd tests/docker-in-docker
           OUTPUT=$(devcontainer up --workspace-folder . --docker-path podman 2>&1)
+          echo "$OUTPUT"
           CONTAINER_ID=$(echo "$OUTPUT" | grep -o '"containerId":"[^"]*"' | cut -d'"' -f4 | head -1)
-          sleep 5
-          podman exec "$CONTAINER_ID" docker run --rm hello-world
+          echo "Container ID: $CONTAINER_ID"
+          
+          # Verify Podman is installed and docker command uses Podman
+          echo "=== Checking docker --version ==="
+          podman exec "$CONTAINER_ID" docker --version
+          
+          echo "=== Checking podman --version ==="
+          podman exec "$CONTAINER_ID" podman --version
+          
+          echo "=== Verifying docker command is really Podman ==="
+          podman exec "$CONTAINER_ID" docker version 2>&1 | tee /tmp/docker-version.txt
+          if grep -qi podman /tmp/docker-version.txt; then
+            echo "✅ Confirmed: docker command is using Podman"
+          else
+            echo "❌ docker command is NOT using Podman"
+            exit 1
+          fi
+          
           podman rm -f "$CONTAINER_ID" || true
-          echo "✅ Docker in Docker PASSED"
+          echo "✅ Docker in Docker (Podman) PASSED"
 
       - name: Test - Sample Python
         run: |
@@ -107,4 +124,6 @@ jobs:
           podman exec "$CONTAINER_ID" go version
           podman rm -f "$CONTAINER_ID" || true
           echo "✅ Sample Go PASSED"
+
+
 

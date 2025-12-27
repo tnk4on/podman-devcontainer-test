@@ -125,7 +125,17 @@ jobs:
             cd ~/podman-devcontainer-test/tests/docker-in-docker
             OUTPUT=$(devcontainer up --workspace-folder . --docker-path podman 2>&1)
             CONTAINER_ID=$(echo "$OUTPUT" | grep -o "\"containerId\":\"[^\"]*\"" | cut -d"\"" -f4 | head -1)
-            sleep 5
+            
+            # Wait for Docker daemon to start (up to 30 seconds)
+            echo "Waiting for Docker daemon..."
+            for i in {1..6}; do
+              if podman exec "$CONTAINER_ID" docker info >/dev/null 2>&1; then
+                echo "Docker daemon ready"
+                break
+              fi
+              sleep 5
+            done
+            
             podman exec "$CONTAINER_ID" docker run --rm hello-world
             podman rm -f "$CONTAINER_ID" || true
             echo "✅ Docker in Docker PASSED"
@@ -176,4 +186,6 @@ jobs:
           gcloud compute instances delete ${{ env.VM_NAME }} \
             --zone=${{ env.GCP_ZONE }} \
             --quiet || true
+
+
 
