@@ -127,15 +127,32 @@ jobs:
             OUTPUT=$(devcontainer up --workspace-folder . --docker-path podman 2>&1)
             CONTAINER_ID=$(echo "$OUTPUT" | grep -o "\"containerId\":\"[^\"]*\"" | cut -d"\"" -f4 | head -1)
             
-            # Wait for Docker daemon to start (up to 30 seconds)
+            if [ -z "$CONTAINER_ID" ]; then
+              echo "Error: Failed to get container ID"
+              echo "Output: $OUTPUT"
+              exit 1
+            fi
+            
+            # Wait for Docker daemon to start (up to 60 seconds)
             echo "Waiting for Docker daemon..."
-            for i in {1..6}; do
+            DOCKER_READY=false
+            for i in {1..12}; do
               if podman exec "$CONTAINER_ID" docker info >/dev/null 2>&1; then
                 echo "Docker daemon ready"
+                DOCKER_READY=true
                 break
               fi
+              echo "Attempt $i/12..."
               sleep 5
             done
+            
+            if [ "$DOCKER_READY" != "true" ]; then
+              echo "Error: Docker daemon did not start within timeout"
+              echo "Checking container status..."
+              podman exec "$CONTAINER_ID" ps aux | grep -i docker || true
+              podman exec "$CONTAINER_ID" systemctl status docker || true
+              exit 1
+            fi
             
             podman exec "$CONTAINER_ID" docker run --rm hello-world
             podman rm -f "$CONTAINER_ID" || true
