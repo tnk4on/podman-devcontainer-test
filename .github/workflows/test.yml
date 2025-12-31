@@ -1,0 +1,307 @@
+name: Dev Container Compatibility Tests
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_fedora:
+        description: 'Run Fedora tests'
+        required: false
+        default: 'true'
+        type: boolean
+      run_ubuntu:
+        description: 'Run Ubuntu tests'
+        required: false
+        default: 'true'
+        type: boolean
+      force_run:
+        description: 'Force run even if versions unchanged'
+        required: false
+        default: 'false'
+        type: boolean
+
+  schedule:
+    - cron: '0 0 * * *'  # Daily
+
+  push:
+    branches: [main]
+    paths:
+      - 'tests/**'
+      - 'scripts/**'
+      - '.github/workflows/**'
+
+  pull_request:
+    branches: [main]
+    paths:
+      - 'tests/**'
+      - 'scripts/**'
+      - '.github/workflows/**'
+
+permissions:
+  contents: write
+  issues: write
+
+env:
+  VERSION_CACHE_FILE: .version-cache.json
+
+jobs:
+  check-versions:
+    name: Check Versions
+    runs-on: ubuntu-latest
+    outputs:
+      podman_updated: ${{ steps.check.outputs.podman_updated }}
+      devcontainer_updated: ${{ steps.check.outputs.devcontainer_updated }}
+      podman_version: ${{ steps.check.outputs.podman_version }}
+      devcontainer_version: ${{ steps.check.outputs.devcontainer_version }}
+      should_run: ${{ steps.check.outputs.should_run }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check versions
+        id: check
+        run: |
+          # Get latest versions with error handling
+          echo "Fetching latest Podman version..."
+          PODMAN_RESPONSE=$(curl -s https://api.github.com/repos/containers/podman/releases/latest || echo "")
+          if [ -z "$PODMAN_RESPONSE" ]; then
+            echo "Warning: Failed to fetch Podman version, using fallback"
+            PODMAN_LATEST="unknown"
+          else
+            PODMAN_LATEST=$(echo "$PODMAN_RESPONSE" | jq -r '.tag_name // "unknown"' | sed 's/^v//')
+          fi
+          
+          echo "Fetching latest devcontainer CLI version..."
+          DEVCONTAINER_LATEST=$(npm view @devcontainers/cli version 2>/dev/null || echo "unknown")
+          
+          echo "Latest Podman: $PODMAN_LATEST"
+          echo "Latest devcontainer CLI: $DEVCONTAINER_LATEST"
+          
+          if [ "$PODMAN_LATEST" = "unknown" ] || [ "$DEVCONTAINER_LATEST" = "unknown" ]; then
+            echo "Warning: Could not fetch some versions, continuing with defaults"
+          fi
+          
+          PODMAN_UPDATED="false"
+          DEVCONTAINER_UPDATED="false"
+          
+          # Check for version updates (only for scheduled runs)
+          if [ "${{ github.event_name }}" == "schedule" ]; then
+            if [ -f "${{ env.VERSION_CACHE_FILE }}" ]; then
+              CACHED_PODMAN=$(jq -r '.podman_version // ""' ${{ env.VERSION_CACHE_FILE }})
+              CACHED_CLI=$(jq -r '.devcontainer_version // ""' ${{ env.VERSION_CACHE_FILE }})
+              [ "$CACHED_PODMAN" != "$PODMAN_LATEST" ] && PODMAN_UPDATED="true"
+              [ "$CACHED_CLI" != "$DEVCONTAINER_LATEST" ] && DEVCONTAINER_UPDATED="true"
+            else
+              PODMAN_UPDATED="true"
+              DEVCONTAINER_UPDATED="true"
+            fi
+          fi
+          
+          # Determine if tests should run
+          SHOULD_RUN="false"
+          if [ "${{ github.event_name }}" == "push" ] || [ "${{ github.event_name }}" == "pull_request" ]; then
+            SHOULD_RUN="true"
+          elif [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+            if [ "${{ github.event.inputs.force_run }}" == "true" ]; then
+              SHOULD_RUN="true"
+            elif [ "$PODMAN_UPDATED" == "true" ] || [ "$DEVCONTAINER_UPDATED" == "true" ]; then
+              SHOULD_RUN="true"
+            else
+              SHOULD_RUN="true"  # Manual dispatch always runs
+            fi
+          elif [ "${{ github.event_name }}" == "schedule" ]; then
+            if [ "$PODMAN_UPDATED" == "true" ] || [ "$DEVCONTAINER_UPDATED" == "true" ]; then
+              SHOULD_RUN="true"
+            fi
+          fi
+          
+          echo "podman_updated=$PODMAN_UPDATED" >> $GITHUB_OUTPUT
+          echo "devcontainer_updated=$DEVCONTAINER_UPDATED" >> $GITHUB_OUTPUT
+          echo "podman_version=$PODMAN_LATEST" >> $GITHUB_OUTPUT
+          echo "devcontainer_version=$DEVCONTAINER_LATEST" >> $GITHUB_OUTPUT
+          echo "should_run=$SHOULD_RUN" >> $GITHUB_OUTPUT
+          
+          echo "=== Decision ==="
+          echo "Should run: $SHOULD_RUN"
+          echo "Podman updated: $PODMAN_UPDATED"
+          echo "CLI updated: $DEVCONTAINER_UPDATED"
+
+  call-ubuntu:
+    name: Ubuntu
+    needs: check-versions
+    if: |
+      needs.check-versions.outputs.should_run == 'true' &&
+      (github.event_name != 'workflow_dispatch' || github.event.inputs.run_ubuntu == 'true')
+    uses: ./.github/workflows/test-ubuntu.yml
+    with:
+      podman_version: ${{ needs.check-versions.outputs.podman_version }}
+      devcontainer_version: ${{ needs.check-versions.outputs.devcontainer_version }}
+
+  call-fedora:
+    name: Fedora
+    needs: check-versions
+    if: |
+      needs.check-versions.outputs.should_run == 'true' &&
+      (github.event_name != 'workflow_dispatch' || github.event.inputs.run_fedora == 'true')
+    uses: ./.github/workflows/test-fedora.yml
+    secrets: inherit
+    with:
+      podman_version: ${{ needs.check-versions.outputs.podman_version }}
+      devcontainer_version: ${{ needs.check-versions.outputs.devcontainer_version }}
+
+  finalize:
+    name: Finalize
+    needs: [check-versions, call-ubuntu, call-fedora]
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Update version cache and README
+        if: |
+          (needs.call-ubuntu.result == 'success' || needs.call-fedora.result == 'success') &&
+          github.event_name != 'pull_request'
+        env:
+          CLI_VER: ${{ needs.check-versions.outputs.devcontainer_version }}
+          UBUNTU_VER: ${{ needs.call-ubuntu.outputs.ubuntu_version }}
+          UBUNTU_PODMAN: ${{ needs.call-ubuntu.outputs.podman_version }}
+          UBUNTU_CLI: ${{ needs.call-ubuntu.outputs.devcontainer_version }}
+          FEDORA_VER: ${{ needs.call-fedora.outputs.fedora_version }}
+          FEDORA_PODMAN: ${{ needs.call-fedora.outputs.podman_version }}
+          FEDORA_CLI: ${{ needs.call-fedora.outputs.devcontainer_version }}
+        run: |
+          TODAY=$(date -u +%Y-%m-%d)
+          
+          # Update README version table
+          UBUNTU_LINE="| Ubuntu | ${UBUNTU_VER:-N/A} | ${UBUNTU_PODMAN:-N/A} | ${UBUNTU_CLI:-N/A} | ${TODAY} |"
+          FEDORA_LINE="| Fedora | ${FEDORA_VER:-N/A} | ${FEDORA_PODMAN:-N/A} | ${FEDORA_CLI:-N/A} | ${TODAY} |"
+          
+          # Create new version table
+          cat > /tmp/version_table.txt << EOF
+          <!-- VERSION_TABLE_START -->
+          | Platform | OS Version | Podman | devcontainer CLI | Last Tested |
+          |----------|------------|--------|------------------|-------------|
+          ${UBUNTU_LINE}
+          ${FEDORA_LINE}
+          <!-- VERSION_TABLE_END -->
+          EOF
+          
+          # Replace version table in README
+          if grep -q "<!-- VERSION_TABLE_START -->" README.md; then
+            # Use awk to replace the section
+            awk '
+              /<!-- VERSION_TABLE_START -->/ { skip=1; system("cat /tmp/version_table.txt"); next }
+              /<!-- VERSION_TABLE_END -->/ { skip=0; next }
+              !skip { print }
+            ' README.md > README.tmp && mv README.tmp README.md
+          fi
+          
+          echo "=== Updated README version table ==="
+          grep -A 6 "VERSION_TABLE_START" README.md
+          
+          # Create version cache JSON
+          cat > ${{ env.VERSION_CACHE_FILE }} << EOF
+          {
+            "devcontainer_version": "${CLI_VER}",
+            "ubuntu_version": "${UBUNTU_VER}",
+            "ubuntu_podman": "${UBUNTU_PODMAN}",
+            "fedora_version": "${FEDORA_VER}",
+            "fedora_podman": "${FEDORA_PODMAN}",
+            "last_updated": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          }
+          EOF
+          
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add ${{ env.VERSION_CACHE_FILE }} README.md || true
+          git diff --staged --quiet || git commit -m "Update tested versions [skip ci]"
+          git push || true
+
+      - name: Notify on tracking issue
+        if: always()
+        uses: actions/github-script@v7
+        continue-on-error: true
+        with:
+          script: |
+            console.log('Starting Issue tracking notification...');
+            try {
+              console.log('Fetching tracking issues...');
+              const issues = await github.rest.issues.listForRepo({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                state: 'open',
+                labels: 'tracking'
+              });
+              
+              console.log(`Found ${issues.data.length} open issues with 'tracking' label`);
+              
+              let issue = issues.data.find(i => i.title === '📊 Test Results Tracking');
+              
+              if (!issue) {
+                console.log('Creating new tracking issue...');
+                issue = (await github.rest.issues.create({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  title: '📊 Test Results Tracking',
+                  body: 'Automated test results and version tracking.',
+                  labels: ['tracking']
+                })).data;
+                console.log(`Created issue #${issue.number}`);
+              } else {
+                console.log(`Using existing issue #${issue.number}`);
+              }
+              
+              // Safely get job results (may be empty if job was skipped)
+              const ubuntuResult = '${{ needs.call-ubuntu.result }}';
+              const fedoraResult = '${{ needs.call-fedora.result }}';
+              const ubuntu = ubuntuResult && ubuntuResult.trim() ? ubuntuResult : 'skipped';
+              const fedora = fedoraResult && fedoraResult.trim() ? fedoraResult : 'skipped';
+              console.log(`Ubuntu result: "${ubuntuResult}" -> ${ubuntu}`);
+              console.log(`Fedora result: "${fedoraResult}" -> ${fedora}`);
+              
+              const icon = r => {
+                if (!r || r === 'skipped' || r.trim() === '') return '⏭️';
+                return r === 'success' ? '✅' : '❌';
+              };
+              
+              const reasons = [];
+              if (ubuntu === 'failure' || fedora === 'failure') reasons.push('Test Failed');
+              if (ubuntu === 'skipped' && fedora === 'skipped') reasons.push('Skipped');
+              
+              const podmanUpdated = '${{ needs.check-versions.outputs.podman_updated }}';
+              const cliUpdated = '${{ needs.check-versions.outputs.devcontainer_updated }}';
+              if (podmanUpdated === 'true') reasons.push('New Podman');
+              if (cliUpdated === 'true') reasons.push('New CLI');
+              
+              const eventName = '${{ github.event_name }}';
+              if (eventName === 'workflow_dispatch') reasons.push('Manual');
+              if (eventName === 'push') reasons.push('Push');
+              if (eventName === 'schedule') reasons.push('Scheduled');
+              
+              // Safely get outputs (may be empty if job was skipped)
+              const ubuntuPodman = '${{ needs.call-ubuntu.outputs.podman_version }}' || 'N/A';
+              const fedoraPodman = '${{ needs.call-fedora.outputs.podman_version }}' || 'N/A';
+              const ubuntuCli = '${{ needs.call-ubuntu.outputs.devcontainer_version }}' || 'N/A';
+              const fedoraCli = '${{ needs.call-fedora.outputs.devcontainer_version }}' || 'N/A';
+              
+              const commentBody = '### ' + new Date().toISOString().split('T')[0] + '\n' +
+                '| Platform | Status | Reason | Podman | CLI |\n' +
+                '|----------|--------|--------|--------|-----|\n' +
+                '| Ubuntu | ' + icon(ubuntu) + ' | ' + (reasons.join(', ') || '-') + ' | ' + ubuntuPodman + ' | ' + ubuntuCli + ' |\n' +
+                '| Fedora | ' + icon(fedora) + ' | ' + (reasons.join(', ') || '-') + ' | ' + fedoraPodman + ' | ' + fedoraCli + ' |\n' +
+                '\n' +
+                '[View Run](' + context.serverUrl + '/' + context.repo.owner + '/' + context.repo.repo + '/actions/runs/' + context.runId + ')';
+              
+              console.log('Posting comment to issue...');
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issue.number,
+                body: commentBody
+              });
+              console.log('Comment posted successfully');
+            } catch (error) {
+              console.error('Failed to update tracking issue:', error);
+              console.error(`Error message: ${error.message}`);
+              console.error(`Error stack: ${error.stack}`);
+            }

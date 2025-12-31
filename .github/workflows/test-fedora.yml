@@ -1,0 +1,348 @@
+name: Test (Fedora)
+
+on:
+  workflow_dispatch:
+    inputs:
+      debug:
+        description: 'Enable debug mode'
+        required: false
+        default: 'false'
+  workflow_call:
+    inputs:
+      podman_version:
+        type: string
+        required: false
+      devcontainer_version:
+        type: string
+        required: false
+    outputs:
+      fedora_version:
+        description: 'Fedora version tested'
+        value: ${{ jobs.test.outputs.fedora_version }}
+      podman_version:
+        description: 'Podman version on Fedora'
+        value: ${{ jobs.test.outputs.podman_version }}
+      devcontainer_version:
+        description: 'devcontainer CLI version on Fedora'
+        value: ${{ jobs.test.outputs.devcontainer_version }}
+
+env:
+  AWS_REGION: us-west-2
+  VM_NAME: fedora-runner-${{ github.run_id }}
+  KEY_NAME: fedora-key-${{ github.run_id }}
+  SECURITY_GROUP_NAME: fedora-sg-${{ github.run_id }}
+  SSH_OPTS: -o StrictHostKeyChecking=no -o ServerAliveInterval=30 -o ServerAliveCountMax=10
+
+jobs:
+  test:
+    name: Run Tests (EC2)
+    runs-on: ubuntu-latest
+    outputs:
+      fedora_version: ${{ steps.versions.outputs.fedora_version }}
+      podman_version: ${{ steps.versions.outputs.podman_version }}
+      devcontainer_version: ${{ steps.versions.outputs.devcontainer_version }}
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+      
+      - name: Verify AWS CLI
+        run: |
+          if ! command -v aws &> /dev/null; then
+            echo "Installing AWS CLI..."
+            curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+            unzip awscliv2.zip
+            sudo ./aws/install
+          fi
+          aws --version
+      
+      - name: Generate SSH key
+        run: |
+          ssh-keygen -t rsa -b 4096 -f ~/.ssh/ec2_key -N '' -q
+          chmod 600 ~/.ssh/ec2_key
+      
+      - name: Import SSH key to AWS
+        run: |
+          aws ec2 import-key-pair \
+            --key-name "${{ env.KEY_NAME }}" \
+            --public-key-material "fileb://$HOME/.ssh/ec2_key.pub" \
+            --region ${{ env.AWS_REGION }}
+      
+      - name: Create security group
+        run: |
+          SG_ID=$(aws ec2 create-security-group \
+            --group-name "${{ env.SECURITY_GROUP_NAME }}" \
+            --description "Security group for Fedora test runner" \
+            --region ${{ env.AWS_REGION }} \
+            --query 'GroupId' --output text)
+          echo "SECURITY_GROUP_ID=$SG_ID" >> $GITHUB_ENV
+          
+          aws ec2 authorize-security-group-ingress \
+            --group-id "$SG_ID" \
+            --protocol tcp \
+            --port 22 \
+            --cidr 0.0.0.0/0 \
+            --region ${{ env.AWS_REGION }}
+      
+      - name: Find Fedora AMI
+        run: |
+          echo "Searching for Fedora 43 AMI..."
+          AMI_ID=$(aws ec2 describe-images \
+            --owners 125523088429 \
+            --filters "Name=name,Values=Fedora-Cloud-Base-AmazonEC2.x86_64-43*" "Name=virtualization-type,Values=hvm" "Name=architecture,Values=x86_64" "Name=state,Values=available" \
+            --query 'Images | sort_by(@, &CreationDate) | [-1].ImageId' \
+            --output text \
+            --region ${{ env.AWS_REGION }})
+          
+          if [ -z "$AMI_ID" ] || [ "$AMI_ID" = "None" ]; then
+            echo "Fedora 43 not found, trying Fedora 42..."
+            AMI_ID=$(aws ec2 describe-images \
+              --owners 125523088429 \
+              --filters "Name=name,Values=Fedora-Cloud-Base-AmazonEC2.x86_64-42*" "Name=virtualization-type,Values=hvm" "Name=architecture,Values=x86_64" "Name=state,Values=available" \
+              --query 'Images | sort_by(@, &CreationDate) | [-1].ImageId' \
+              --output text \
+              --region ${{ env.AWS_REGION }})
+          fi
+          
+          if [ -z "$AMI_ID" ] || [ "$AMI_ID" = "None" ]; then
+            echo "Error: Could not find Fedora AMI"
+            exit 1
+          fi
+          
+          echo "AMI_ID=$AMI_ID" >> $GITHUB_ENV
+          echo "Using AMI: $AMI_ID"
+          aws ec2 describe-images --image-ids "$AMI_ID" --region ${{ env.AWS_REGION }} \
+            --query 'Images[0].[Name,ImageId,CreationDate]' --output table
+      
+      - name: Create Fedora EC2 instance
+        run: |
+          # c6id.large: 2 vCPU, 4GB RAM, 118GB NVMe SSD - 40% faster than t3.medium
+          # Using spot instance for cost savings
+          # 20GB EBS root disk + 118GB NVMe SSD for container storage
+          INSTANCE_ID=$(aws ec2 run-instances \
+            --image-id ${{ env.AMI_ID }} \
+            --instance-type c6id.large \
+            --key-name "${{ env.KEY_NAME }}" \
+            --security-group-ids "${{ env.SECURITY_GROUP_ID }}" \
+            --block-device-mappings '[{"DeviceName":"/dev/sda1","Ebs":{"VolumeSize":20,"VolumeType":"gp3"}}]' \
+            --instance-market-options '{"MarketType":"spot","SpotOptions":{"SpotInstanceType":"one-time"}}' \
+            --tag-specifications "ResourceType=instance,Tags=[{Key=Name,Value=${{ env.VM_NAME }}}]" \
+            --region ${{ env.AWS_REGION }} \
+            --query 'Instances[0].InstanceId' --output text)
+          
+          echo "INSTANCE_ID=$INSTANCE_ID" >> $GITHUB_ENV
+          echo "Instance ID: $INSTANCE_ID"
+          
+          aws ec2 wait instance-running --instance-ids "$INSTANCE_ID" --region ${{ env.AWS_REGION }}
+          
+          VM_IP=$(aws ec2 describe-instances \
+            --instance-ids "$INSTANCE_ID" \
+            --region ${{ env.AWS_REGION }} \
+            --query 'Reservations[0].Instances[0].PublicIpAddress' --output text)
+          
+          echo "VM_IP=$VM_IP" >> $GITHUB_ENV
+          echo "VM IP: $VM_IP"
+      
+      - name: Wait for SSH
+        run: |
+          for i in {1..20}; do
+            ssh ${{ env.SSH_OPTS }} -o ConnectTimeout=5 -i ~/.ssh/ec2_key fedora@${{ env.VM_IP }} "echo OK" 2>/dev/null && break
+            sleep 3
+          done
+      
+      - name: Setup Fedora VM
+        run: |
+          ssh ${{ env.SSH_OPTS }} -i ~/.ssh/ec2_key fedora@${{ env.VM_IP }} '
+            set -e
+            echo "=== Mounting NVMe SSD for container storage ==="
+            # Find NVMe SSD (disk without partitions)
+            for disk in /dev/nvme*n1; do
+              if [ -b "$disk" ]; then
+                PARTS=$(ls ${disk}p* 2>/dev/null | wc -l)
+                if [ "$PARTS" -eq 0 ]; then
+                  echo "Found NVMe SSD: $disk"
+                  sudo mkfs.xfs -f $disk
+                  mkdir -p ~/.local/share/containers
+                  sudo mount $disk ~/.local/share/containers
+                  sudo chown -R $(id -u):$(id -g) ~/.local/share/containers
+                  break
+                fi
+              fi
+            done
+            df -h ~/.local/share/containers
+            
+            echo "=== Installing packages ==="
+            sudo dnf install -y git podman-docker
+            
+            echo "=== Installing Node.js and devcontainer CLI ==="
+            curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh | bash
+            export NVM_DIR="$HOME/.nvm"
+            [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
+            nvm install --lts
+            npm install -g @devcontainers/cli
+            
+            echo "=== Configuring Podman ==="
+            mkdir -p ~/.config/containers
+            echo "unqualified-search-registries = [\"docker.io\"]" > ~/.config/containers/registries.conf
+            echo -e "[containers]\nlabel = false" >> ~/.config/containers/containers.conf
+            
+            echo "=== Loading iptables kernel modules (Podman machine equivalent) ==="
+            sudo modprobe ip_tables
+            sudo modprobe ip6_tables
+            sudo modprobe nf_nat
+            sudo modprobe nft_chain_nat || true
+            
+            echo "=== Configuring cgroup delegation (Podman machine equivalent) ==="
+            sudo mkdir -p /etc/systemd/system/user@.service.d
+            echo -e "[Service]\nDelegate=memory pids cpu io" | sudo tee /etc/systemd/system/user@.service.d/delegate.conf
+            sudo systemctl daemon-reload
+            
+            echo "=== Enabling Podman socket ==="
+            systemctl --user enable --now podman.socket
+            
+            echo "=== Cloning test repository ==="
+            git clone https://github.com/tnk4on/podman-devcontainer-test.git
+          '
+
+      - name: Capture versions
+        id: versions
+        run: |
+          FEDORA_VER=$(ssh ${{ env.SSH_OPTS }} -i ~/.ssh/ec2_key fedora@${{ env.VM_IP }} 'cat /etc/os-release | grep VERSION_ID | cut -d= -f2')
+          PODMAN_VER=$(ssh ${{ env.SSH_OPTS }} -i ~/.ssh/ec2_key fedora@${{ env.VM_IP }} 'podman --version | awk "{print \$3}"')
+          CLI_VER=$(ssh ${{ env.SSH_OPTS }} -i ~/.ssh/ec2_key fedora@${{ env.VM_IP }} 'export NVM_DIR="$HOME/.nvm" && . "$NVM_DIR/nvm.sh" && devcontainer --version')
+          echo "fedora_version=$FEDORA_VER" >> $GITHUB_OUTPUT
+          echo "podman_version=$PODMAN_VER" >> $GITHUB_OUTPUT
+          echo "devcontainer_version=$CLI_VER" >> $GITHUB_OUTPUT
+          echo "Fedora: $FEDORA_VER, Podman: $PODMAN_VER, CLI: $CLI_VER"
+
+      - name: Test - Minimal
+        run: |
+          ssh ${{ env.SSH_OPTS }} -i ~/.ssh/ec2_key fedora@${{ env.VM_IP }} '
+            set -e
+            export NVM_DIR="$HOME/.nvm" && . "$NVM_DIR/nvm.sh"
+            cd ~/podman-devcontainer-test/tests/minimal
+            OUTPUT=$(devcontainer up --workspace-folder . --docker-path podman 2>&1) || { echo "$OUTPUT"; exit 1; }
+            CONTAINER_ID=$(echo "$OUTPUT" | grep -o "\"containerId\":\"[^\"]*\"" | cut -d"\"" -f4 | head -1)
+            [ -z "$CONTAINER_ID" ] && exit 1
+            podman rm -f "$CONTAINER_ID" || true
+            echo "✅ Minimal PASSED"
+          '
+
+      - name: Test - Dockerfile
+        run: |
+          ssh ${{ env.SSH_OPTS }} -i ~/.ssh/ec2_key fedora@${{ env.VM_IP }} '
+            set -e
+            export NVM_DIR="$HOME/.nvm" && . "$NVM_DIR/nvm.sh"
+            cd ~/podman-devcontainer-test/tests/dockerfile
+            OUTPUT=$(devcontainer up --workspace-folder . --docker-path podman 2>&1) || { echo "$OUTPUT"; exit 1; }
+            CONTAINER_ID=$(echo "$OUTPUT" | grep -o "\"containerId\":\"[^\"]*\"" | cut -d"\"" -f4 | head -1)
+            [ -z "$CONTAINER_ID" ] && exit 1
+            podman exec "$CONTAINER_ID" curl --version
+            podman rm -f "$CONTAINER_ID" || true
+            echo "✅ Dockerfile PASSED"
+          '
+
+      - name: Test - Features (Go)
+        run: |
+          ssh ${{ env.SSH_OPTS }} -i ~/.ssh/ec2_key fedora@${{ env.VM_IP }} '
+            set -e
+            export NVM_DIR="$HOME/.nvm" && . "$NVM_DIR/nvm.sh"
+            cd ~/podman-devcontainer-test/tests/features-go
+            OUTPUT=$(devcontainer up --workspace-folder . --docker-path podman 2>&1) || { echo "$OUTPUT"; exit 1; }
+            CONTAINER_ID=$(echo "$OUTPUT" | grep -o "\"containerId\":\"[^\"]*\"" | cut -d"\"" -f4 | head -1)
+            [ -z "$CONTAINER_ID" ] && exit 1
+            podman exec "$CONTAINER_ID" go version
+            podman rm -f "$CONTAINER_ID" || true
+            echo "✅ Features (Go) PASSED"
+          '
+
+      - name: Test - Docker in Docker
+        timeout-minutes: 8
+        run: |
+          ssh ${{ env.SSH_OPTS }} -i ~/.ssh/ec2_key fedora@${{ env.VM_IP }} '
+            set -e
+            export NVM_DIR="$HOME/.nvm" && . "$NVM_DIR/nvm.sh"
+            cd ~/podman-devcontainer-test/tests/docker-in-docker
+            
+            OUTPUT=$(devcontainer up --workspace-folder . --docker-path podman 2>&1) || { echo "$OUTPUT"; exit 1; }
+            CONTAINER_ID=$(echo "$OUTPUT" | grep -o "\"containerId\":\"[^\"]*\"" | cut -d"\"" -f4 | head -1)
+            [ -z "$CONTAINER_ID" ] && exit 1
+            
+            echo "Waiting for Docker daemon..."
+            for i in {1..30}; do
+              podman exec "$CONTAINER_ID" docker info &>/dev/null && break
+              sleep 2
+            done
+            
+            podman exec "$CONTAINER_ID" docker version
+            podman exec "$CONTAINER_ID" docker run --rm hello-world
+            podman rm -f "$CONTAINER_ID" || true
+            echo "✅ Docker in Docker PASSED"
+          '
+
+      - name: Test - Sample Python
+        run: |
+          ssh ${{ env.SSH_OPTS }} -i ~/.ssh/ec2_key fedora@${{ env.VM_IP }} '
+            set -e
+            export NVM_DIR="$HOME/.nvm" && . "$NVM_DIR/nvm.sh"
+            cd ~/podman-devcontainer-test/tests/sample-python
+            OUTPUT=$(devcontainer up --workspace-folder . --docker-path podman 2>&1) || { echo "$OUTPUT"; exit 1; }
+            CONTAINER_ID=$(echo "$OUTPUT" | grep -o "\"containerId\":\"[^\"]*\"" | cut -d"\"" -f4 | head -1)
+            [ -z "$CONTAINER_ID" ] && exit 1
+            podman exec "$CONTAINER_ID" python3 --version
+            podman rm -f "$CONTAINER_ID" || true
+            echo "✅ Sample Python PASSED"
+          '
+
+      - name: Test - Sample Node.js
+        run: |
+          ssh ${{ env.SSH_OPTS }} -i ~/.ssh/ec2_key fedora@${{ env.VM_IP }} '
+            set -e
+            export NVM_DIR="$HOME/.nvm" && . "$NVM_DIR/nvm.sh"
+            cd ~/podman-devcontainer-test/tests/sample-node
+            OUTPUT=$(devcontainer up --workspace-folder . --docker-path podman 2>&1) || { echo "$OUTPUT"; exit 1; }
+            CONTAINER_ID=$(echo "$OUTPUT" | grep -o "\"containerId\":\"[^\"]*\"" | cut -d"\"" -f4 | head -1)
+            [ -z "$CONTAINER_ID" ] && exit 1
+            podman exec "$CONTAINER_ID" node --version
+            podman rm -f "$CONTAINER_ID" || true
+            echo "✅ Sample Node.js PASSED"
+          '
+
+      - name: Test - Sample Go
+        run: |
+          ssh ${{ env.SSH_OPTS }} -i ~/.ssh/ec2_key fedora@${{ env.VM_IP }} '
+            set -e
+            export NVM_DIR="$HOME/.nvm" && . "$NVM_DIR/nvm.sh"
+            cd ~/podman-devcontainer-test/tests/sample-go
+            OUTPUT=$(devcontainer up --workspace-folder . --docker-path podman 2>&1) || { echo "$OUTPUT"; exit 1; }
+            CONTAINER_ID=$(echo "$OUTPUT" | grep -o "\"containerId\":\"[^\"]*\"" | cut -d"\"" -f4 | head -1)
+            [ -z "$CONTAINER_ID" ] && exit 1
+            podman exec "$CONTAINER_ID" go version
+            podman rm -f "$CONTAINER_ID" || true
+            echo "✅ Sample Go PASSED"
+          '
+
+      - name: Delete Fedora EC2 instance
+        if: always()
+        run: |
+          if [ -n "${{ env.INSTANCE_ID }}" ]; then
+            aws ec2 terminate-instances --instance-ids "${{ env.INSTANCE_ID }}" --region ${{ env.AWS_REGION }} || true
+            aws ec2 wait instance-terminated --instance-ids "${{ env.INSTANCE_ID }}" --region ${{ env.AWS_REGION }} || true
+          fi
+      
+      - name: Delete security group
+        if: always()
+        run: |
+          if [ -n "${{ env.SECURITY_GROUP_ID }}" ]; then
+            aws ec2 delete-security-group --group-id "${{ env.SECURITY_GROUP_ID }}" --region ${{ env.AWS_REGION }} || true
+          fi
+      
+      - name: Delete SSH key pair
+        if: always()
+        run: |
+          aws ec2 delete-key-pair --key-name "${{ env.KEY_NAME }}" --region ${{ env.AWS_REGION }} || true

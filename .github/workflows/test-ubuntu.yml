@@ -1,0 +1,152 @@
+name: Test (Ubuntu)
+
+on:
+  workflow_dispatch:
+  workflow_call:
+    inputs:
+      podman_version:
+        type: string
+        required: false
+      devcontainer_version:
+        type: string
+        required: false
+    outputs:
+      ubuntu_version:
+        description: 'Ubuntu version tested'
+        value: ${{ jobs.test.outputs.ubuntu_version }}
+      podman_version:
+        description: 'Podman version on Ubuntu'
+        value: ${{ jobs.test.outputs.podman_version }}
+      devcontainer_version:
+        description: 'devcontainer CLI version on Ubuntu'
+        value: ${{ jobs.test.outputs.devcontainer_version }}
+
+jobs:
+  test:
+    name: Run Tests
+    runs-on: ubuntu-latest
+    outputs:
+      ubuntu_version: ${{ steps.versions.outputs.ubuntu_version }}
+      podman_version: ${{ steps.versions.outputs.podman_version }}
+      devcontainer_version: ${{ steps.versions.outputs.devcontainer_version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Remove Docker (if present)
+        run: |
+          if command -v docker &> /dev/null; then
+            sudo apt-get remove -y docker docker-engine docker.io containerd runc moby-buildx moby-cli moby-compose moby-containerd moby-engine moby-runc || true
+            sudo apt-get autoremove -y || true
+          fi
+
+      - name: Install Podman and podman-docker
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y podman podman-docker
+          
+      - name: Verify docker command uses Podman
+        run: |
+          docker version 2>&1 | grep -qi podman || { echo "docker is NOT using Podman"; exit 1; }
+          echo "✅ docker command is using Podman"
+
+      - name: Configure Podman
+        run: |
+          mkdir -p ~/.config/containers
+          echo 'unqualified-search-registries = ["docker.io"]' > ~/.config/containers/registries.conf
+
+      - name: Install @devcontainers/cli
+        run: npm install -g @devcontainers/cli
+
+      - name: Capture versions
+        id: versions
+        run: |
+          echo "ubuntu_version=$(lsb_release -rs)" >> $GITHUB_OUTPUT
+          echo "podman_version=$(podman --version | awk '{print $3}')" >> $GITHUB_OUTPUT
+          echo "devcontainer_version=$(devcontainer --version)" >> $GITHUB_OUTPUT
+          echo "=== Versions ==="
+          echo "Ubuntu: $(lsb_release -rs)"
+          echo "Podman: $(podman --version)"
+          echo "devcontainer: $(devcontainer --version)"
+
+      - name: Test - Minimal
+        run: |
+          cd tests/minimal
+          OUTPUT=$(devcontainer up --workspace-folder . --docker-path podman 2>&1) || { echo "$OUTPUT"; exit 1; }
+          CONTAINER_ID=$(echo "$OUTPUT" | grep -o '"containerId":"[^"]*"' | cut -d'"' -f4 | head -1)
+          [ -z "$CONTAINER_ID" ] && exit 1
+          podman rm -f "$CONTAINER_ID" || true
+          echo "✅ Minimal PASSED"
+
+      - name: Test - Dockerfile
+        run: |
+          cd tests/dockerfile
+          OUTPUT=$(devcontainer up --workspace-folder . --docker-path podman 2>&1) || { echo "$OUTPUT"; exit 1; }
+          CONTAINER_ID=$(echo "$OUTPUT" | grep -o '"containerId":"[^"]*"' | cut -d'"' -f4 | head -1)
+          [ -z "$CONTAINER_ID" ] && exit 1
+          podman exec "$CONTAINER_ID" curl --version
+          podman rm -f "$CONTAINER_ID" || true
+          echo "✅ Dockerfile PASSED"
+
+      - name: Test - Features (Go)
+        run: |
+          cd tests/features-go
+          OUTPUT=$(devcontainer up --workspace-folder . --docker-path podman 2>&1) || { echo "$OUTPUT"; exit 1; }
+          CONTAINER_ID=$(echo "$OUTPUT" | grep -o '"containerId":"[^"]*"' | cut -d'"' -f4 | head -1)
+          [ -z "$CONTAINER_ID" ] && exit 1
+          podman exec "$CONTAINER_ID" go version
+          podman rm -f "$CONTAINER_ID" || true
+          echo "✅ Features (Go) PASSED"
+
+      - name: Test - Docker in Docker
+        timeout-minutes: 8
+        run: |
+          cd tests/docker-in-docker
+          OUTPUT=$(devcontainer up --workspace-folder . --docker-path podman 2>&1) || { echo "$OUTPUT"; exit 1; }
+          CONTAINER_ID=$(echo "$OUTPUT" | grep -o '"containerId":"[^"]*"' | cut -d'"' -f4 | head -1)
+          [ -z "$CONTAINER_ID" ] && exit 1
+          
+          echo "Waiting for Docker daemon..."
+          for i in {1..30}; do
+            podman exec "$CONTAINER_ID" docker info &>/dev/null && break
+            sleep 2
+          done
+          
+          podman exec "$CONTAINER_ID" docker version
+          podman exec "$CONTAINER_ID" docker run --rm hello-world
+          podman rm -f "$CONTAINER_ID" || true
+          echo "✅ Docker in Docker PASSED"
+
+      - name: Test - Sample Python
+        run: |
+          cd tests/sample-python
+          OUTPUT=$(devcontainer up --workspace-folder . --docker-path podman 2>&1) || { echo "$OUTPUT"; exit 1; }
+          CONTAINER_ID=$(echo "$OUTPUT" | grep -o '"containerId":"[^"]*"' | cut -d'"' -f4 | head -1)
+          [ -z "$CONTAINER_ID" ] && exit 1
+          podman exec "$CONTAINER_ID" python3 --version
+          podman rm -f "$CONTAINER_ID" || true
+          echo "✅ Sample Python PASSED"
+
+      - name: Test - Sample Node.js
+        run: |
+          cd tests/sample-node
+          OUTPUT=$(devcontainer up --workspace-folder . --docker-path podman 2>&1) || { echo "$OUTPUT"; exit 1; }
+          CONTAINER_ID=$(echo "$OUTPUT" | grep -o '"containerId":"[^"]*"' | cut -d'"' -f4 | head -1)
+          [ -z "$CONTAINER_ID" ] && exit 1
+          podman exec "$CONTAINER_ID" node --version
+          podman rm -f "$CONTAINER_ID" || true
+          echo "✅ Sample Node.js PASSED"
+
+      - name: Test - Sample Go
+        run: |
+          cd tests/sample-go
+          OUTPUT=$(devcontainer up --workspace-folder . --docker-path podman 2>&1) || { echo "$OUTPUT"; exit 1; }
+          CONTAINER_ID=$(echo "$OUTPUT" | grep -o '"containerId":"[^"]*"' | cut -d'"' -f4 | head -1)
+          [ -z "$CONTAINER_ID" ] && exit 1
+          podman exec "$CONTAINER_ID" go version
+          podman rm -f "$CONTAINER_ID" || true
+          echo "✅ Sample Go PASSED"
