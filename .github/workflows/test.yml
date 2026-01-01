@@ -85,11 +85,30 @@ jobs:
           # Check for version updates (only for scheduled runs)
           if [ "${{ github.event_name }}" == "schedule" ]; then
             if [ -f "${{ env.VERSION_CACHE_FILE }}" ]; then
+              # Use cached version from JSON file
               CACHED_PODMAN=$(jq -r '.podman_version // ""' ${{ env.VERSION_CACHE_FILE }})
               CACHED_CLI=$(jq -r '.devcontainer_version // ""' ${{ env.VERSION_CACHE_FILE }})
               [ "$CACHED_PODMAN" != "$PODMAN_LATEST" ] && PODMAN_UPDATED="true"
               [ "$CACHED_CLI" != "$DEVCONTAINER_LATEST" ] && DEVCONTAINER_UPDATED="true"
+            elif [ -f "README.md" ] && grep -q "VERSION_TABLE_START" README.md; then
+              # Fallback: Extract version from README if cache doesn't exist
+              echo "Cache file not found, checking README for version info..."
+              # Extract Fedora Podman version (usually the latest) and CLI version from Ubuntu row
+              README_PODMAN_FEDORA=$(sed -n '/VERSION_TABLE_START/,/VERSION_TABLE_END/p' README.md | grep "Fedora" | cut -d'|' -f4 | tr -d ' ')
+              README_CLI=$(sed -n '/VERSION_TABLE_START/,/VERSION_TABLE_END/p' README.md | grep "Ubuntu" | cut -d'|' -f5 | tr -d ' ')
+              
+              # Use the latest Podman version from README (Fedora is usually newer)
+              CACHED_PODMAN="$README_PODMAN_FEDORA"
+              CACHED_CLI="$README_CLI"
+              
+              echo "Found in README - Podman: $CACHED_PODMAN, CLI: $CACHED_CLI"
+              
+              # Compare with latest versions
+              [ -n "$CACHED_PODMAN" ] && [ "$CACHED_PODMAN" != "$PODMAN_LATEST" ] && PODMAN_UPDATED="true"
+              [ -n "$CACHED_CLI" ] && [ "$CACHED_CLI" != "$DEVCONTAINER_LATEST" ] && DEVCONTAINER_UPDATED="true"
             else
+              # No cache and no README version info - treat as first run
+              echo "No version cache or README version info found - this appears to be the first run"
               PODMAN_UPDATED="true"
               DEVCONTAINER_UPDATED="true"
             fi
