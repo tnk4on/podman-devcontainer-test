@@ -1,4 +1,5 @@
 {
+  "podman_version": "5.7.1",
   "devcontainer_version": "0.80.3",
   "ubuntu_version": "24.04",
   "ubuntu_podman": "4.9.3",

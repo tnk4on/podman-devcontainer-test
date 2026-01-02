@@ -86,8 +86,12 @@ jobs:
           if [ "${{ github.event_name }}" == "schedule" ]; then
             if [ -f "${{ env.VERSION_CACHE_FILE }}" ]; then
               # Use cached version from JSON file
-              CACHED_PODMAN=$(jq -r '.podman_version // ""' ${{ env.VERSION_CACHE_FILE }})
+              # Note: Use fedora_podman as it's typically the latest version
+              CACHED_PODMAN=$(jq -r '.fedora_podman // .podman_version // ""' ${{ env.VERSION_CACHE_FILE }})
               CACHED_CLI=$(jq -r '.devcontainer_version // ""' ${{ env.VERSION_CACHE_FILE }})
+              
+              echo "Cached Podman: $CACHED_PODMAN"
+              echo "Cached CLI: $CACHED_CLI"
               [ "$CACHED_PODMAN" != "$PODMAN_LATEST" ] && PODMAN_UPDATED="true"
               [ "$CACHED_CLI" != "$DEVCONTAINER_LATEST" ] && DEVCONTAINER_UPDATED="true"
             elif [ -f "README.md" ] && grep -q "VERSION_TABLE_START" README.md; then
@@ -219,8 +223,10 @@ jobs:
           grep -A 6 "VERSION_TABLE_START" README.md
           
           # Create version cache JSON
+          # Note: podman_version uses fedora_podman as it's typically the latest
           cat > ${{ env.VERSION_CACHE_FILE }} << EOF
           {
+            "podman_version": "${FEDORA_PODMAN}",
             "devcontainer_version": "${CLI_VER}",
             "ubuntu_version": "${UBUNTU_VER}",
             "ubuntu_podman": "${UBUNTU_PODMAN}",
