@@ -1,9 +1,9 @@
 {
   "podman_version": "5.7.1",
-  "devcontainer_version": "0.83.1",
+  "devcontainer_version": "0.83.2",
   "ubuntu_version": "24.04",
   "ubuntu_podman": "4.9.3",
   "fedora_version": "43",
   "fedora_podman": "5.7.1",
-  "last_updated": "2026-02-18T00:49:44Z"
+  "last_updated": "2026-02-19T00:49:38Z"
 }
