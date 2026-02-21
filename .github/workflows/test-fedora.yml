@@ -177,6 +177,7 @@ jobs:
             df -h ~/.local/share/containers
             
             echo "=== Installing packages ==="
+            sudo dnf update podman -y
             sudo dnf install -y git podman-docker
             
             echo "=== Installing Node.js and devcontainer CLI ==="
