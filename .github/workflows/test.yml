@@ -41,6 +41,7 @@ permissions:
   issues: write
 
 env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
   VERSION_CACHE_FILE: .version-cache.json
 
 jobs:

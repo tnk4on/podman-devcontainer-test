@@ -21,6 +21,9 @@ on:
         description: 'devcontainer CLI version on Ubuntu'
         value: ${{ jobs.test.outputs.devcontainer_version }}
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   test:
     name: Run Tests

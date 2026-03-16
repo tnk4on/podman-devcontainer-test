@@ -27,6 +27,7 @@ on:
         value: ${{ jobs.test.outputs.devcontainer_version }}
 
 env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
   AWS_REGION: us-west-2
   VM_NAME: fedora-runner-${{ github.run_id }}
   KEY_NAME: fedora-key-${{ github.run_id }}
