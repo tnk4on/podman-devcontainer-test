@@ -225,9 +225,10 @@ jobs:
           
           # Create version cache JSON
           # Note: podman_version uses fedora_podman as it's typically the latest
-          # Note: podman_latest stores the GitHub API result for accurate
-          # schedule comparison (avoids mismatch with distro versions)
-          PODMAN_LATEST="${{ needs.check-versions.outputs.podman_version }}"
+          # Note: podman_latest stores the actual Fedora-installed version
+          # This ensures the schedule trigger fires again if the Fedora repo
+          # hasn't caught up to the GitHub release yet
+          PODMAN_LATEST="${FEDORA_PODMAN:-${{ needs.check-versions.outputs.podman_version }}}"
           cat > ${{ env.VERSION_CACHE_FILE }} << EOF
           {
             "podman_version": "${FEDORA_PODMAN}",
@@ -313,6 +314,12 @@ jobs:
               const fedoraPodman = '${{ needs.call-fedora.outputs.podman_version }}' || 'N/A';
               const ubuntuCli = '${{ needs.call-ubuntu.outputs.devcontainer_version }}' || 'N/A';
               const fedoraCli = '${{ needs.call-fedora.outputs.devcontainer_version }}' || 'N/A';
+              
+              // Show version mismatch warning when detected != actual
+              const detectedPodman = '${{ needs.check-versions.outputs.podman_version }}';
+              if (podmanUpdated === 'true' && fedoraPodman && fedoraPodman !== 'N/A' && detectedPodman && fedoraPodman !== detectedPodman) {
+                reasons.push(`⚠️ detected:${detectedPodman} actual:${fedoraPodman}`);
+              }
               
               const commentBody = '### ' + new Date().toISOString().split('T')[0] + '\n' +
                 '| Platform | Status | Reason | Podman | CLI |\n' +
