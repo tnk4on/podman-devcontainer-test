@@ -4,7 +4,7 @@
   "devcontainer_version": "0.87.0",
   "ubuntu_version": "24.04",
   "ubuntu_podman": "4.9.3",
-  "fedora_version": "43",
+  "fedora_version": "44",
   "fedora_podman": "5.8.2",
-  "last_updated": "2026-06-05T02:47:59Z"
+  "last_updated": "2026-06-05T02:57:14Z"
 }
