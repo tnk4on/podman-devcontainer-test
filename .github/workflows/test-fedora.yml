@@ -92,29 +92,22 @@ jobs:
       
       - name: Find Fedora AMI
         run: |
-          echo "Searching for Fedora 43 AMI..."
-          AMI_ID=$(aws ec2 describe-images \
-            --owners 125523088429 \
-            --filters "Name=name,Values=Fedora-Cloud-Base-AmazonEC2.x86_64-43*" "Name=virtualization-type,Values=hvm" "Name=architecture,Values=x86_64" "Name=state,Values=available" \
-            --query 'Images | sort_by(@, &CreationDate) | [-1].ImageId' \
-            --output text \
-            --region ${{ env.AWS_REGION }})
-          
-          if [ -z "$AMI_ID" ] || [ "$AMI_ID" = "None" ]; then
-            echo "Fedora 43 not found, trying Fedora 42..."
+          for ver in 44 43; do
+            echo "Searching for Fedora ${ver} AMI..."
             AMI_ID=$(aws ec2 describe-images \
               --owners 125523088429 \
-              --filters "Name=name,Values=Fedora-Cloud-Base-AmazonEC2.x86_64-42*" "Name=virtualization-type,Values=hvm" "Name=architecture,Values=x86_64" "Name=state,Values=available" \
+              --filters "Name=name,Values=Fedora-Cloud-Base-AmazonEC2.x86_64-${ver}*" "Name=virtualization-type,Values=hvm" "Name=architecture,Values=x86_64" "Name=state,Values=available" \
               --query 'Images | sort_by(@, &CreationDate) | [-1].ImageId' \
               --output text \
               --region ${{ env.AWS_REGION }})
-          fi
-          
+            [ -n "$AMI_ID" ] && [ "$AMI_ID" != "None" ] && break
+          done
+
           if [ -z "$AMI_ID" ] || [ "$AMI_ID" = "None" ]; then
             echo "Error: Could not find Fedora AMI"
             exit 1
           fi
-          
+
           echo "AMI_ID=$AMI_ID" >> $GITHUB_ENV
           echo "Using AMI: $AMI_ID"
           aws ec2 describe-images --image-ids "$AMI_ID" --region ${{ env.AWS_REGION }} \
