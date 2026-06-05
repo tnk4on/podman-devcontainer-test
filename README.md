@@ -6,7 +6,7 @@
 | Platform | OS Version | Podman | devcontainer CLI | Last Tested |
 |----------|------------|--------|------------------|-------------|
 | Ubuntu | 24.04 | 4.9.3 | 0.87.0 | 2026-06-04 |
-| Fedora | N/A | N/A | N/A | 2026-06-04 |
+| Fedora | 43 | 5.8.1 | 0.87.0 | 2026-06-04 |
 <!-- VERSION_TABLE_END -->
 
 Automated compatibility tests for [VS Code Dev Containers](https://code.visualstudio.com/docs/devcontainers/containers) with [Podman](https://podman.io/).

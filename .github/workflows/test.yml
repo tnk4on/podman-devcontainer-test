@@ -196,10 +196,21 @@ jobs:
           FEDORA_CLI: ${{ needs.call-fedora.outputs.devcontainer_version }}
         run: |
           TODAY=$(date -u +%Y-%m-%d)
-          
-          # Update README version table
-          UBUNTU_LINE="| Ubuntu | ${UBUNTU_VER:-N/A} | ${UBUNTU_PODMAN:-N/A} | ${UBUNTU_CLI:-N/A} | ${TODAY} |"
-          FEDORA_LINE="| Fedora | ${FEDORA_VER:-N/A} | ${FEDORA_PODMAN:-N/A} | ${FEDORA_CLI:-N/A} | ${TODAY} |"
+
+          # For failed/skipped platforms, preserve existing README values
+          if [ -z "$UBUNTU_VER" ] && grep -q "| Ubuntu |" README.md; then
+            EXISTING_UBUNTU=$(sed -n '/VERSION_TABLE_START/,/VERSION_TABLE_END/p' README.md | grep "| Ubuntu |")
+            UBUNTU_LINE="$EXISTING_UBUNTU"
+          else
+            UBUNTU_LINE="| Ubuntu | ${UBUNTU_VER:-N/A} | ${UBUNTU_PODMAN:-N/A} | ${UBUNTU_CLI:-N/A} | ${TODAY} |"
+          fi
+
+          if [ -z "$FEDORA_VER" ] && grep -q "| Fedora |" README.md; then
+            EXISTING_FEDORA=$(sed -n '/VERSION_TABLE_START/,/VERSION_TABLE_END/p' README.md | grep "| Fedora |")
+            FEDORA_LINE="$EXISTING_FEDORA"
+          else
+            FEDORA_LINE="| Fedora | ${FEDORA_VER:-N/A} | ${FEDORA_PODMAN:-N/A} | ${FEDORA_CLI:-N/A} | ${TODAY} |"
+          fi
           
           # Create new version table
           cat > /tmp/version_table.txt << EOF
@@ -224,12 +235,20 @@ jobs:
           echo "=== Updated README version table ==="
           grep -A 6 "VERSION_TABLE_START" README.md
           
-          # Create version cache JSON
-          # Note: podman_version uses fedora_podman as it's typically the latest
-          # Note: podman_latest stores the actual Fedora-installed version
-          # This ensures the schedule trigger fires again if the Fedora repo
-          # hasn't caught up to the GitHub release yet
-          PODMAN_LATEST="${FEDORA_PODMAN:-${{ needs.check-versions.outputs.podman_version }}}"
+          # For version cache, preserve existing values for failed/skipped platforms
+          if [ -f "${{ env.VERSION_CACHE_FILE }}" ]; then
+            CACHED_UBUNTU_VER=$(jq -r '.ubuntu_version // ""' ${{ env.VERSION_CACHE_FILE }})
+            CACHED_UBUNTU_PODMAN=$(jq -r '.ubuntu_podman // ""' ${{ env.VERSION_CACHE_FILE }})
+            CACHED_FEDORA_VER=$(jq -r '.fedora_version // ""' ${{ env.VERSION_CACHE_FILE }})
+            CACHED_FEDORA_PODMAN=$(jq -r '.fedora_podman // ""' ${{ env.VERSION_CACHE_FILE }})
+            CACHED_PODMAN_LATEST=$(jq -r '.podman_latest // ""' ${{ env.VERSION_CACHE_FILE }})
+          fi
+          UBUNTU_VER="${UBUNTU_VER:-$CACHED_UBUNTU_VER}"
+          UBUNTU_PODMAN="${UBUNTU_PODMAN:-$CACHED_UBUNTU_PODMAN}"
+          FEDORA_VER="${FEDORA_VER:-$CACHED_FEDORA_VER}"
+          FEDORA_PODMAN="${FEDORA_PODMAN:-$CACHED_FEDORA_PODMAN}"
+
+          PODMAN_LATEST="${FEDORA_PODMAN:-${CACHED_PODMAN_LATEST:-${{ needs.check-versions.outputs.podman_version }}}}"
           cat > ${{ env.VERSION_CACHE_FILE }} << EOF
           {
             "podman_version": "${FEDORA_PODMAN}",
