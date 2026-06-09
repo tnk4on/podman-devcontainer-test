@@ -115,12 +115,12 @@ jobs:
       
       - name: Create Fedora EC2 instance
         run: |
-          # c6id.large: 2 vCPU, 4GB RAM, 118GB NVMe SSD - 40% faster than t3.medium
+          # c6id.xlarge: 4 vCPU, 8GB RAM, 237GB NVMe SSD
           # Using spot instance for cost savings
-          # 20GB EBS root disk + 118GB NVMe SSD for container storage
+          # 20GB EBS root disk + 237GB NVMe SSD for container storage
           INSTANCE_ID=$(aws ec2 run-instances \
             --image-id ${{ env.AMI_ID }} \
-            --instance-type c6id.large \
+            --instance-type c6id.xlarge \
             --key-name "${{ env.KEY_NAME }}" \
             --security-group-ids "${{ env.SECURITY_GROUP_ID }}" \
             --block-device-mappings '[{"DeviceName":"/dev/sda1","Ebs":{"VolumeSize":20,"VolumeType":"gp3"}}]' \
