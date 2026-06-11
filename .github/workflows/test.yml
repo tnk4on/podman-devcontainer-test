@@ -6,17 +6,17 @@ on:
       run_fedora:
         description: 'Run Fedora tests'
         required: false
-        default: 'true'
+        default: true
         type: boolean
       run_ubuntu:
         description: 'Run Ubuntu tests'
         required: false
-        default: 'true'
+        default: true
         type: boolean
       force_run:
         description: 'Force run even if versions unchanged'
         required: false
-        default: 'false'
+        default: false
         type: boolean
 
   schedule:
