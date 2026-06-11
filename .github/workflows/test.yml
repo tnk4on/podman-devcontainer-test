@@ -62,12 +62,18 @@ jobs:
         run: |
           # Get latest versions with error handling
           echo "Fetching latest Podman version..."
-          PODMAN_RESPONSE=$(curl -s https://api.github.com/repos/containers/podman/releases/latest || echo "")
+          PODMAN_RESPONSE=$(curl -s -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" https://api.github.com/repos/containers/podman/releases/latest || echo "")
           if [ -z "$PODMAN_RESPONSE" ]; then
             echo "Warning: Failed to fetch Podman version, using fallback"
             PODMAN_LATEST="unknown"
           else
             PODMAN_LATEST=$(echo "$PODMAN_RESPONSE" | jq -r '.tag_name // "unknown"' | sed 's/^v//')
+          fi
+          
+          # Fall back to cached version if API returned unknown
+          if [ "$PODMAN_LATEST" = "unknown" ] && [ -f "${{ env.VERSION_CACHE_FILE }}" ]; then
+            PODMAN_LATEST=$(jq -r '.podman_latest // .fedora_podman // .podman_version // "unknown"' ${{ env.VERSION_CACHE_FILE }})
+            echo "Warning: GitHub API rate-limited, using cached Podman version: $PODMAN_LATEST"
           fi
           
           echo "Fetching latest devcontainer CLI version..."
