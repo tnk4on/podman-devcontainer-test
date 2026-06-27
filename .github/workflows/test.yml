@@ -383,6 +383,8 @@ jobs:
               if (eventName === 'schedule') reasons.push('Scheduled');
               
               // Safely get outputs (may be empty if job was skipped)
+              const ubuntuVer = '${{ needs.call-ubuntu.outputs.ubuntu_version }}' || 'N/A';
+              const fedoraVer = '${{ needs.call-fedora.outputs.fedora_version }}' || 'N/A';
               const ubuntuPodman = '${{ needs.call-ubuntu.outputs.podman_version }}' || 'N/A';
               const fedoraPodman = '${{ needs.call-fedora.outputs.podman_version }}' || 'N/A';
               const ubuntuCli = '${{ needs.call-ubuntu.outputs.devcontainer_version }}' || 'N/A';
@@ -405,10 +407,10 @@ jobs:
               }
 
               const commentBody = '### ' + new Date().toISOString().split('T')[0] + '\n' +
-                '| Platform | Status | Reason | Podman | CLI |\n' +
-                '|----------|--------|--------|--------|-----|\n' +
-                '| Ubuntu | ' + icon(ubuntu) + ' | ' + (reasons.join(', ') || '-') + ' | ' + ubuntuPodman + ' | ' + ubuntuCli + ' |\n' +
-                '| Fedora | ' + icon(fedora) + ' | ' + (reasons.join(', ') || '-') + ' | ' + fedoraPodman + ' | ' + fedoraCli + ' |\n' +
+                '| Platform | OS | Status | Reason | Podman | CLI |\n' +
+                '|----------|----|--------|--------|--------|-----|\n' +
+                '| Ubuntu | ' + ubuntuVer + ' | ' + icon(ubuntu) + ' | ' + (reasons.join(', ') || '-') + ' | ' + ubuntuPodman + ' | ' + ubuntuCli + ' |\n' +
+                '| Fedora | ' + fedoraVer + ' | ' + icon(fedora) + ' | ' + (reasons.join(', ') || '-') + ' | ' + fedoraPodman + ' | ' + fedoraCli + ' |\n' +
                 newVersionNote + '\n' +
                 '[View Run](' + context.serverUrl + '/' + context.repo.owner + '/' + context.repo.repo + '/actions/runs/' + context.runId + ')';
               
