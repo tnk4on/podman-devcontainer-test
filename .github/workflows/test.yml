@@ -54,6 +54,8 @@ jobs:
       podman_version: ${{ steps.check.outputs.podman_version }}
       devcontainer_version: ${{ steps.check.outputs.devcontainer_version }}
       should_run: ${{ steps.check.outputs.should_run }}
+      new_ubuntu_available: ${{ steps.check-new-versions.outputs.new_ubuntu_available }}
+      new_fedora_available: ${{ steps.check-new-versions.outputs.new_fedora_available }}
     steps:
       - uses: actions/checkout@v4
 
@@ -154,6 +156,51 @@ jobs:
           echo "Should run: $SHOULD_RUN"
           echo "Podman updated: $PODMAN_UPDATED"
           echo "CLI updated: $DEVCONTAINER_UPDATED"
+
+      - name: Check for new platform versions
+        id: check-new-versions
+        run: |
+          # Read current tested versions from cache
+          if [ -f "${{ env.VERSION_CACHE_FILE }}" ]; then
+            CURRENT_UBUNTU_VER=$(jq -r '.ubuntu_version // ""' ${{ env.VERSION_CACHE_FILE }})
+            CURRENT_FEDORA_VER=$(jq -r '.fedora_version // ""' ${{ env.VERSION_CACHE_FILE }})
+          fi
+          CURRENT_UBUNTU_YEAR=$(echo "${CURRENT_UBUNTU_VER:-26.04}" | cut -d. -f1)
+          CURRENT_FEDORA=${CURRENT_FEDORA_VER:-44}
+
+          # --- Check for new Ubuntu LTS runner image ---
+          NEXT_UBUNTU_YEAR=$((CURRENT_UBUNTU_YEAR + 2))
+          NEXT_UBUNTU="${NEXT_UBUNTU_YEAR}.04"
+          echo "Checking if ubuntu-${NEXT_UBUNTU} runner image exists..."
+
+          RUNNER_README=$(curl -s --connect-timeout 10 --max-time 30 \
+            "https://raw.githubusercontent.com/actions/runner-images/main/README.md" || echo "")
+
+          NEW_UBUNTU=""
+          if echo "$RUNNER_README" | grep -q "\`ubuntu-${NEXT_UBUNTU}\`"; then
+            NEW_UBUNTU="ubuntu-${NEXT_UBUNTU}"
+            echo "New Ubuntu runner detected: $NEW_UBUNTU"
+          else
+            echo "No new Ubuntu runner detected (checked for ubuntu-${NEXT_UBUNTU})"
+          fi
+          echo "new_ubuntu_available=${NEW_UBUNTU}" >> $GITHUB_OUTPUT
+
+          # --- Check for new Fedora Cloud release ---
+          NEXT_FEDORA=$((CURRENT_FEDORA + 1))
+          echo "Checking if Fedora ${NEXT_FEDORA} Cloud images exist..."
+
+          FEDORA_HTTP=$(curl -sL -o /dev/null -w "%{http_code}" \
+            --connect-timeout 10 --max-time 30 \
+            "https://download.fedoraproject.org/pub/fedora/linux/releases/${NEXT_FEDORA}/Cloud/x86_64/images/" || echo "000")
+
+          NEW_FEDORA=""
+          if [ "$FEDORA_HTTP" = "200" ]; then
+            NEW_FEDORA="$NEXT_FEDORA"
+            echo "New Fedora Cloud release detected: Fedora ${NEXT_FEDORA}"
+          else
+            echo "No new Fedora Cloud release detected (checked for Fedora ${NEXT_FEDORA}, HTTP ${FEDORA_HTTP})"
+          fi
+          echo "new_fedora_available=${NEW_FEDORA}" >> $GITHUB_OUTPUT
 
   call-ubuntu:
     name: Ubuntu
@@ -347,12 +394,22 @@ jobs:
                 reasons.push(`⚠️ detected:${detectedPodman} actual:${fedoraPodman}`);
               }
               
+              // Build new version notification (only when detected)
+              const newUbuntu = '${{ needs.check-versions.outputs.new_ubuntu_available }}';
+              const newFedora = '${{ needs.check-versions.outputs.new_fedora_available }}';
+              let newVersionNote = '';
+              if (newUbuntu || newFedora) {
+                newVersionNote = '\n---\n🆕 **New versions available:**\n';
+                if (newUbuntu) newVersionNote += '- Ubuntu: `' + newUbuntu + '` runner image is now available\n';
+                if (newFedora) newVersionNote += '- Fedora: Fedora `' + newFedora + '` Cloud image is now available\n';
+              }
+
               const commentBody = '### ' + new Date().toISOString().split('T')[0] + '\n' +
                 '| Platform | Status | Reason | Podman | CLI |\n' +
                 '|----------|--------|--------|--------|-----|\n' +
                 '| Ubuntu | ' + icon(ubuntu) + ' | ' + (reasons.join(', ') || '-') + ' | ' + ubuntuPodman + ' | ' + ubuntuCli + ' |\n' +
                 '| Fedora | ' + icon(fedora) + ' | ' + (reasons.join(', ') || '-') + ' | ' + fedoraPodman + ' | ' + fedoraCli + ' |\n' +
-                '\n' +
+                newVersionNote + '\n' +
                 '[View Run](' + context.serverUrl + '/' + context.repo.owner + '/' + context.repo.repo + '/actions/runs/' + context.runId + ')';
               
               console.log('Posting comment to issue...');
