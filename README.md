@@ -5,7 +5,7 @@
 <!-- VERSION_TABLE_START -->
 | Platform | OS Version | Podman | devcontainer CLI | Last Tested |
 |----------|------------|--------|------------------|-------------|
-| Ubuntu | 26.04 | 5.7.0 | 0.87.0 | 2026-06-27 |
+| Ubuntu | 26.04 | 5.7.0 | 0.88.0 | 2026-07-23 |
 | Fedora | 44 | 5.8.3 | 0.87.0 | 2026-06-27 |
 <!-- VERSION_TABLE_END -->
 
