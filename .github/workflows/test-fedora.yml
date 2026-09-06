@@ -115,30 +115,56 @@ jobs:
       
       - name: Create Fedora EC2 instance
         run: |
-          # c6id.xlarge: 4 vCPU, 8GB RAM, 237GB NVMe SSD
-          # Using spot instance for cost savings
-          # 20GB EBS root disk + 237GB NVMe SSD for container storage
-          INSTANCE_ID=$(aws ec2 run-instances \
-            --image-id ${{ env.AMI_ID }} \
-            --instance-type c6id.xlarge \
-            --key-name "${{ env.KEY_NAME }}" \
-            --security-group-ids "${{ env.SECURITY_GROUP_ID }}" \
-            --block-device-mappings '[{"DeviceName":"/dev/sda1","Ebs":{"VolumeSize":20,"VolumeType":"gp3"}}]' \
-            --instance-market-options '{"MarketType":"spot","SpotOptions":{"SpotInstanceType":"one-time"}}' \
-            --tag-specifications "ResourceType=instance,Tags=[{Key=Name,Value=${{ env.VM_NAME }}}]" \
-            --region ${{ env.AWS_REGION }} \
-            --query 'Instances[0].InstanceId' --output text)
-          
+          # Try multiple instance types to handle InsufficientInstanceCapacity
+          # NVMe-equipped types (d.) use 20GB EBS + NVMe for containers; others use 60GB EBS
+          INSTANCE_TYPES=("c6id.xlarge" "c5ad.xlarge" "m6id.xlarge" "c6i.xlarge")
+          INSTANCE_ID=""
+
+          for INSTANCE_TYPE in "${INSTANCE_TYPES[@]}"; do
+            echo "=== Trying spot instance: $INSTANCE_TYPE ==="
+
+            if [[ "$INSTANCE_TYPE" == *"d."* ]]; then
+              EBS_SIZE=20
+            else
+              EBS_SIZE=60
+            fi
+
+            INSTANCE_ID=$(aws ec2 run-instances \
+              --image-id ${{ env.AMI_ID }} \
+              --instance-type "$INSTANCE_TYPE" \
+              --key-name "${{ env.KEY_NAME }}" \
+              --security-group-ids "${{ env.SECURITY_GROUP_ID }}" \
+              --block-device-mappings "[{\"DeviceName\":\"/dev/sda1\",\"Ebs\":{\"VolumeSize\":${EBS_SIZE},\"VolumeType\":\"gp3\"}}]" \
+              --instance-market-options '{"MarketType":"spot","SpotOptions":{"SpotInstanceType":"one-time"}}' \
+              --tag-specifications "ResourceType=instance,Tags=[{Key=Name,Value=${{ env.VM_NAME }}}]" \
+              --region ${{ env.AWS_REGION }} \
+              --query 'Instances[0].InstanceId' --output text 2>/tmp/ec2_error) || true
+
+            if [ -n "$INSTANCE_ID" ] && [ "$INSTANCE_ID" != "None" ]; then
+              echo "Launched $INSTANCE_TYPE: $INSTANCE_ID"
+              break
+            fi
+
+            echo "Failed ($INSTANCE_TYPE): $(cat /tmp/ec2_error 2>/dev/null)"
+            INSTANCE_ID=""
+            sleep 3
+          done
+
+          if [ -z "$INSTANCE_ID" ]; then
+            echo "Error: Could not launch any spot instance after trying: ${INSTANCE_TYPES[*]}"
+            exit 1
+          fi
+
           echo "INSTANCE_ID=$INSTANCE_ID" >> $GITHUB_ENV
           echo "Instance ID: $INSTANCE_ID"
-          
+
           aws ec2 wait instance-running --instance-ids "$INSTANCE_ID" --region ${{ env.AWS_REGION }}
-          
+
           VM_IP=$(aws ec2 describe-instances \
             --instance-ids "$INSTANCE_ID" \
             --region ${{ env.AWS_REGION }} \
             --query 'Reservations[0].Instances[0].PublicIpAddress' --output text)
-          
+
           echo "VM_IP=$VM_IP" >> $GITHUB_ENV
           echo "VM IP: $VM_IP"
       
