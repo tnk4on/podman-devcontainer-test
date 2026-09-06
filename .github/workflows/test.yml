@@ -41,7 +41,6 @@ permissions:
   issues: write
 
 env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
   VERSION_CACHE_FILE: .version-cache.json
 
 jobs:
@@ -57,32 +56,19 @@ jobs:
       new_ubuntu_available: ${{ steps.check-new-versions.outputs.new_ubuntu_available }}
       new_fedora_available: ${{ steps.check-new-versions.outputs.new_fedora_available }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Check versions
         id: check
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # Get latest versions with retry (no auth header — public endpoint,
-          # GITHUB_TOKEN scoped to this repo causes auth failures on cross-repo calls)
           echo "Fetching latest Podman version..."
-          PODMAN_LATEST="unknown"
-          for attempt in 1 2 3; do
-            PODMAN_RESPONSE=$(curl -sf --connect-timeout 10 --max-time 30 \
-              https://api.github.com/repos/containers/podman/releases/latest 2>/dev/null) || true
-            if [ -n "$PODMAN_RESPONSE" ]; then
-              VER=$(echo "$PODMAN_RESPONSE" | jq -r '.tag_name // empty' | sed 's/^v//')
-              if [ -n "$VER" ]; then
-                PODMAN_LATEST="$VER"
-                break
-              fi
-            fi
-            echo "Attempt $attempt failed, retrying in 5s..."
-            sleep 5
-          done
+          PODMAN_LATEST=$(gh api repos/containers/podman/releases/latest --jq '.tag_name' 2>/dev/null | sed 's/^v//') || true
 
-          if [ "$PODMAN_LATEST" = "unknown" ] && [ -f "${{ env.VERSION_CACHE_FILE }}" ]; then
+          if [ -z "$PODMAN_LATEST" ] && [ -f "${{ env.VERSION_CACHE_FILE }}" ]; then
             PODMAN_LATEST=$(jq -r '.podman_latest // .fedora_podman // .podman_version // "unknown"' ${{ env.VERSION_CACHE_FILE }})
-            echo "Warning: All API attempts failed, using cached Podman version: $PODMAN_LATEST"
+            echo "Warning: gh api failed, using cached Podman version: $PODMAN_LATEST"
           fi
           
           echo "Fetching latest devcontainer CLI version..."
@@ -238,7 +224,7 @@ jobs:
     runs-on: ubuntu-latest
     if: always()
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
 
@@ -331,7 +317,7 @@ jobs:
 
       - name: Notify on tracking issue
         if: always()
-        uses: actions/github-script@v7
+        uses: actions/github-script@v9
         continue-on-error: true
         with:
           script: |
