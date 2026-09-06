@@ -91,16 +91,19 @@ jobs:
       
       - name: Find Fedora AMI
         run: |
-          for ver in 44 43; do
-            echo "Searching for Fedora ${ver} AMI..."
-            AMI_ID=$(aws ec2 describe-images \
-              --owners 125523088429 \
-              --filters "Name=name,Values=Fedora-Cloud-Base-AmazonEC2.x86_64-${ver}*" "Name=virtualization-type,Values=hvm" "Name=architecture,Values=x86_64" "Name=state,Values=available" \
-              --query 'Images | sort_by(@, &CreationDate) | [-1].ImageId' \
-              --output text \
-              --region ${{ env.AWS_REGION }})
-            [ -n "$AMI_ID" ] && [ "$AMI_ID" != "None" ] && break
-          done
+          ALL_AMIS=$(aws ec2 describe-images \
+            --owners 125523088429 \
+            --filters "Name=name,Values=Fedora-Cloud-Base-AmazonEC2.x86_64-*" \
+                      "Name=virtualization-type,Values=hvm" \
+                      "Name=architecture,Values=x86_64" \
+                      "Name=state,Values=available" \
+            --query 'Images[*].[ImageId,Name,CreationDate]' \
+            --output text \
+            --region ${{ env.AWS_REGION }})
+
+          LATEST_VER=$(echo "$ALL_AMIS" | grep -o 'x86_64-[0-9]*' | sed 's/x86_64-//' | sort -unr | head -1)
+          AMI_ID=$(echo "$ALL_AMIS" | grep "x86_64-${LATEST_VER}" | sort -k3,3r | head -1 | awk '{print $1}')
+          echo "Found Fedora ${LATEST_VER}: $AMI_ID"
 
           if [ -z "$AMI_ID" ] || [ "$AMI_ID" = "None" ]; then
             echo "Error: Could not find Fedora AMI"
