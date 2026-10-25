@@ -26,6 +26,10 @@ on:
         description: 'devcontainer CLI version on Fedora'
         value: ${{ jobs.test.outputs.devcontainer_version }}
 
+permissions:
+  id-token: write
+  contents: read
+
 env:
   AWS_REGION: us-west-2
   VM_NAME: fedora-runner-${{ github.run_id }}
@@ -47,8 +51,7 @@ jobs:
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v6
         with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          role-to-assume: arn:aws:iam::567297530339:role/github-actions-ec2
           aws-region: ${{ env.AWS_REGION }}
       
       - name: Verify AWS CLI
